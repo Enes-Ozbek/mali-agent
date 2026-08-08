@@ -1,0 +1,18 @@
+                    e-ARŞİV FATURA
+
+Yıldız Mühendislik ve Danışmanlık Limited Şirketi
+Vergi Dairesi                    : Kadıköy
+Vergi Kimlik No                  : 2930118475
+
+Fatura No                        : YMD2025000001204
+Fatura Tarihi                    : 15 Mayıs 2025
+Para Birimi                      : TL
+Ödeme Şekli                      : HAVALE/EFT
+
+Sıra  Mal/Hizmet Cinsi                    Miktar    Birim Fiyat       Tutar
+1     Proje Danışmanlık Hizmeti           1 Adet    12.500,00 TL   12.500,00 TL
+
+                                   Mal Hizmet Toplam Tutarı       12.500,00 TL
+                                   KDV Oranı                      %20
+                                   Toplam Vergi Tutarı             2.500,00 TL
+                                   Ödenecek Tutar                 15.000,00 TL

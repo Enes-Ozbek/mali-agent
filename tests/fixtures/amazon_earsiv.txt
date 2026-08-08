@@ -1,0 +1,27 @@
+                    e-ARŞİV FATURA
+
+Amazon Turkey Perakende Hizmetleri Limited Şirketi
+Vergi Dairesi                    : Boğaziçi Kurumlar
+Vergi Kimlik No                  : 4590874863
+Adres                            : [GIZLENDI]
+
+SAYIN
+T.C. Kimlik No                   : [GIZLENDI]
+Teslimat Adresi                  : [GIZLENDI]
+
+Fatura No                        : AMZ2026000045123
+Fatura Tarihi                    : 03 / 03 / 2026
+Düzenlenme Zamanı                : 14:22:07
+Para Birimi                      : TRY
+Ödeme Şekli                      : KREDIKARTI
+ETTN                             : 8f2c1a44-9b3e-4d21-b7a0-1e5c9d3f2a68
+
+Sıra  Mal/Hizmet Cinsi                          Miktar   Birim Fiyat    KDV Oranı    Tutar
+1     Anker Soundcore Q30 Bluetooth Kulaklık    1 Adet   1.040,00 TL    %20          1.040,00 TL
+2     USB-C Şarj Kablosu 2m                     2 Adet     120,00 TL    %20            240,00 TL
+
+                                   Mal Hizmet Toplam Tutarı        1.280,00 TL
+                                   Hesaplanan KDV(%20)               256,00 TL
+                                   Toplam Vergi Tutarı               256,00 TL
+                                   Vergiler Dahil Toplam Tutar     1.536,00 TL
+                                   Ödenecek Tutar                  1.536,00 TL

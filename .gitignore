@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Never commit real invoices or the database built from them.
+sample_invoices/
+sample_archive/
+*.db
+*.sqlite3
+
+# Embedding cache -- regenerable from categories.jsonl, and large.
+# The trained head (malimusavir/models/*.npz) IS committed: it is small and means
+# nobody has to retrain to use the project.
+training/data/embeddings.npz

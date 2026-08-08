@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mali Müşavir</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="stylesheet" href="_ds/classical-03ce8088-f55b-4974-ac53-6ee0c3c447d4/styles.css">
+<script src="_ds/classical-03ce8088-f55b-4974-ac53-6ee0c3c447d4/_ds_bundle.js"></script>
+<style>
+/* The Classical design system is editorial -- 15px body, 20px headings, density 1.15x,
+   tuned for book-like reading. This is a dense financial ledger, so the app scale is
+   pulled in. Matters most on 1080p with Windows display scaling at 125-150%, where the
+   effective viewport is only ~1536 or ~1280 CSS px. */
+html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text)}
+#dc-root{height:100vh;display:flex;flex-direction:column;overflow:hidden;font-size:13px}
+/* The dc runtime wraps the template in <div class="sc-host">, which defaults to
+   display:block. That breaks the flex chain -- flex:1 on .cols below is inert unless
+   its actual parent is a flex container, and the columns then size to content and
+   push the chat input off-screen. */
+#dc-root > .sc-host{display:flex;flex-direction:column;flex:1;min-height:0}
+#dc-root h4{font-size:13.5px;letter-spacing:.01em}
+#dc-root .btn{font-size:12px;padding:5px 11px}
+#dc-root .input{font-size:12.5px;padding:6px 9px}
+#dc-root .tag{font-size:10px;padding:1px 6px}
+.num{font-variant-numeric:tabular-nums;font-feature-settings:'tnum'}
+.dropzone{cursor:pointer}
+.dropzone:hover{border-color:var(--color-accent) !important}
+.scroll::-webkit-scrollbar{width:7px}
+.scroll::-webkit-scrollbar-thumb{background:var(--color-neutral-300);border-radius:4px}
+.krow:hover{background:color-mix(in srgb, var(--color-text) 4%, transparent)}
+.crow{cursor:pointer}
+.crow:hover{background:color-mix(in srgb, var(--color-accent) 8%, transparent)}
+.mode{border:0;background:transparent;font:inherit;cursor:pointer;padding:2px 7px;border-radius:3px}
+.link{cursor:pointer;color:var(--color-accent);border:0;background:transparent;font:inherit;padding:0}
+.link:hover{text-decoration:underline}
+/* grid-template-rows:minmax(0,1fr) is load-bearing: without it the single row is
+   auto-sized, so a long chat transcript grows the row past the viewport and pushes
+   the message input below the fold. min-height:0 on the container alone does not
+   constrain the row. */
+.cols{display:grid;grid-template-columns:236px minmax(0,1fr) 318px;grid-template-rows:minmax(0,1fr);flex:1;min-height:0}
+/* Effective viewport shrinks under display scaling; give the ledger the space back. */
+@media (max-width:1500px){.cols{grid-template-columns:208px minmax(0,1fr) 288px}}
+@media (max-width:1200px){.cols{grid-template-columns:184px minmax(0,1fr) 264px}}
+</style>
+</helmet>
+
+<div style="display:flex;align-items:center;gap:10px;padding:7px 14px;border-bottom:1px solid var(--color-divider);flex:none">
+<span style="font-family:var(--font-heading);font-weight:600;font-size:14.5px">Mali Müşavir</span>
+<sc-if value="{{ isClient }}" hint-placeholder-val="{{ false }}">
+<span style="display:flex;align-items:center;gap:9px">
+<span style="width:1px;height:14px;background:var(--color-divider)"></span>
+<button class="link" style="font-size:12px" onClick="{{ back }}">← Müşteriler</button>
+<span style="font-size:13px">{{ client.label }}</span>
+<span class="num" style="font-size:11px;opacity:.55">{{ client.meta }}</span>
+</span>
+</sc-if>
+<span class="num" style="margin-left:auto;font-size:11.5px;opacity:.65">{{ headline }}</span>
+</div>
+
+<sc-if value="{{ isList }}" hint-placeholder-val="{{ true }}">
+<div class="scroll" style="flex:1;overflow:auto;padding:18px 22px">
+<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
+<h4 style="margin:0">Müşteriler</h4>
+<span class="num" style="font-size:11.5px;opacity:.55">{{ clientCountLabel }}</span>
+<input class="input" style="margin-left:auto;min-width:240px" placeholder="Müşteri ara…" value="{{ search }}" onChange="{{ onSearch }}">
+</div>
+<hr class="hr" style="margin:12px 0 0">
+
+<div style="display:grid;grid-template-columns:minmax(200px,1.6fr) 120px 90px 130px 90px 100px;padding:7px 12px;border-bottom:1px solid var(--color-text);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:color-mix(in srgb, var(--color-text) 60%, transparent)">
+<span>Müşteri</span><span>VKN</span><span style="text-align:right">Fatura</span><span style="text-align:right">Toplam</span><span style="text-align:right">İşaretli</span><span style="text-align:right">Yıllar</span>
+</div>
+<sc-for list="{{ clientRows }}" as="c" hint-placeholder-count="4">
+<div class="crow" style="display:grid;grid-template-columns:minmax(200px,1.6fr) 120px 90px 130px 90px 100px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--color-divider);font-size:12.5px" onClick="{{ c.open }}">
+<span style="display:flex;align-items:center;gap:8px;min-width:0">
+<span style="width:7px;height:7px;border-radius:50%;flex:none;background:{{ c.dot }}"></span>
+<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.label }}</span>
+</span>
+<span class="num" style="font-size:11.5px;opacity:.6">{{ c.taxId }}</span>
+<span class="num" style="text-align:right">{{ c.invoices }}</span>
+<span class="num" style="text-align:right">{{ c.totalStr }}</span>
+<span class="num" style="text-align:right;color:{{ c.flaggedColor }}">{{ c.flaggedLabel }}</span>
+<span class="num" style="text-align:right;font-size:11px;opacity:.6">{{ c.years }}</span>
+</div>
+</sc-for>
+<div style="padding:11px 12px;font-size:11.5px;opacity:.55">{{ clientNote }}</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isClient }}" hint-placeholder-val="{{ false }}">
+<div class="cols">
+
+<div class="scroll" style="border-right:1px solid var(--color-divider);overflow:auto">
+<div style="padding:9px 14px;border-bottom:1px solid var(--color-divider)">
+<div style="font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-accent);margin-bottom:5px">Yıl</div>
+<div style="display:flex;flex-wrap:wrap;gap:3px">
+<sc-for list="{{ years }}" as="y" hint-placeholder-count="2">
+<button class="mode" style="font-size:11px;color:{{ y.color }};box-shadow:{{ y.shadow }}" onClick="{{ y.pick }}">{{ y.label }}</button>
+</sc-for>
+</div>
+</div>
+
+<div style="padding:10px 14px 8px">
+<div style="font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-accent)">Yinelenen</div>
+<div class="num" style="font-family:var(--font-heading);font-weight:400;font-size:21px;line-height:1.1;margin-top:3px">{{ recTotalStr }}</div>
+<div style="font-size:10.5px;opacity:.55">aylık taahhüt</div>
+</div>
+<sc-for list="{{ recurring }}" as="r" hint-placeholder-count="2">
+<div style="padding:8px 14px;border-top:1px solid var(--color-divider)">
+<div style="font-size:11.5px;line-height:1.3">{{ r.vendorShort }}</div>
+<div style="display:flex;align-items:baseline;gap:7px;margin-top:3px">
+<span class="num" style="font-size:13.5px">{{ r.aylikStr }}</span>
+<span class="num" style="margin-left:auto;font-size:10px;opacity:.5">{{ r.adet }}× · ~{{ r.gun }}g</span>
+</div>
+</div>
+</sc-for>
+<div style="padding:10px 14px;border-top:1px solid var(--color-divider)">
+<div style="font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-accent);margin-bottom:5px">Kategoriler</div>
+<sc-for list="{{ cats }}" as="c" hint-placeholder-count="4">
+<div style="display:flex;align-items:center;gap:6px;font-size:11.5px;padding:2px 0">
+<span style="width:6px;height:6px;border-radius:50%;flex:none;background:{{ c.color }}"></span>
+<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.category }}</span>
+<span class="num" style="opacity:.6">{{ c.toplamStr }}</span>
+</div>
+</sc-for>
+</div>
+</div>
+
+<div class="scroll" style="display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--color-divider);overflow:auto">
+
+<div style="padding:10px 14px;border-bottom:1px solid var(--color-divider);flex:none">
+<div style="display:flex;align-items:baseline;gap:9px">
+<h4 style="margin:0">Tahakkuklar</h4>
+<span style="font-size:10.5px;opacity:.55">{{ tahakkukNote }}</span>
+</div>
+<sc-if value="{{ hasTahakkuk }}" hint-placeholder-val="{{ true }}">
+<div style="display:grid;grid-template-columns:70px 78px 1fr 96px 90px 74px;padding:5px 0;margin-top:7px;border-bottom:1px solid var(--color-divider);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:color-mix(in srgb, var(--color-text) 60%, transparent)">
+<span>Tür</span><span>Dönem</span><span>Fiş No</span><span style="text-align:right">Ödenecek</span><span style="text-align:right">Vade</span><span style="text-align:right">Durum</span>
+</div>
+<sc-for list="{{ tahakkuklar }}" as="t" hint-placeholder-count="2">
+<div class="krow" style="display:grid;grid-template-columns:70px 78px 1fr 96px 90px 74px;align-items:center;padding:5px 0;border-bottom:1px solid var(--color-divider);font-size:11.5px">
+<span style="text-transform:uppercase">{{ t.kind }}</span>
+<span class="num" style="opacity:.7">{{ t.period }}</span>
+<span class="num" style="font-size:10px;opacity:.55;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px">{{ t.receiptNo }}</span>
+<span class="num" style="text-align:right">{{ t.payableStr }}</span>
+<span class="num" style="text-align:right;opacity:.7">{{ t.dueStr }}</span>
+<span style="text-align:right"><span class="{{ t.tagClass }}">{{ t.status }}</span></span>
+</div>
+</sc-for>
+</sc-if>
+</div>
+
+<div style="display:flex;align-items:flex-end;gap:3px;height:50px;padding:10px 14px 0;border-bottom:1px solid var(--color-divider);flex:none">
+<sc-for list="{{ months }}" as="m" hint-placeholder-count="12">
+<div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%" onMouseEnter="{{ m.hover }}" onMouseLeave="{{ clearHover }}" title="{{ m.title }}">
+<div style-hover="background:var(--color-accent-600)" style="width:100%;background:var(--color-accent-300);height:{{ m.pctShort }}%"></div>
+</div>
+</sc-for>
+<span class="num" style="flex:none;padding-left:10px;font-size:10.5px;opacity:.6;white-space:nowrap">{{ hoverReadout }}</span>
+</div>
+
+<div style="display:grid;grid-template-columns:74px minmax(0,1fr) 96px 84px 84px 62px;padding:5px 14px;border-bottom:1px solid var(--color-divider);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:color-mix(in srgb, var(--color-text) 60%, transparent);flex:none">
+<span>Tarih</span><span>Satıcı</span><span>Kategori</span><span style="text-align:right">KDV</span><span style="text-align:right">Toplam</span><span style="text-align:right">Durum</span>
+</div>
+<sc-for list="{{ ledger }}" as="i" hint-placeholder-count="10">
+<div class="krow" style="display:grid;grid-template-columns:74px minmax(0,1fr) 96px 84px 84px 62px;align-items:center;padding:3.5px 14px;border-bottom:1px solid var(--color-divider);font-size:11.5px">
+<span class="num" style="opacity:.65">{{ i.dateTr }}</span>
+<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px">{{ i.vendorShort }}</span>
+<span style="display:flex;align-items:center;gap:5px;font-size:10.5px;overflow:hidden"><span style="width:5px;height:5px;border-radius:50%;flex:none;background:{{ i.color }}"></span>{{ i.category }}</span>
+<span class="num" style="text-align:right;opacity:.6">{{ i.taxStr }}</span>
+<span class="num" style="text-align:right">{{ i.totalStr }}</span>
+<span style="text-align:right"><span class="{{ i.tagClass }}">{{ i.status }}</span></span>
+</div>
+</sc-for>
+<div style="padding:8px 14px;font-size:10.5px;opacity:.55">{{ ledgerNote }}</div>
+</div>
+
+<div style="display:flex;flex-direction:column;min-height:0;background:var(--color-surface)">
+<div style="padding:8px 13px;border-bottom:1px solid var(--color-divider);flex:none">
+<div style="display:flex;align-items:baseline;gap:8px">
+<h4 style="margin:0">Yardımcı</h4>
+<span style="margin-left:auto;display:flex;gap:2px;border:1px solid var(--color-divider);border-radius:4px;padding:1px">
+<button class="mode" style="font-size:10px;color:{{ aiColor }};box-shadow:{{ aiShadow }}" onClick="{{ setAi }}">AI</button>
+<button class="mode" style="font-size:10px;color:{{ fastColor }};box-shadow:{{ fastShadow }}" onClick="{{ setFast }}">Hızlı</button>
+</span>
+</div>
+<p style="margin:4px 0 0;font-size:10px;opacity:.6;line-height:1.4">{{ modeNote }}</p>
+</div>
+
+<div class="scroll" style="flex:1;overflow:auto;padding:10px 13px;display:flex;flex-direction:column;gap:10px">
+<sc-for list="{{ chat }}" as="m" hint-placeholder-count="2">
+<div style="display:flex;flex-direction:column;gap:4px;align-items:{{ m.align }}">
+<div style="font-size:9px;letter-spacing:.09em;text-transform:uppercase;opacity:.45">{{ m.who }}</div>
+<div style="max-width:97%;font-size:12px;line-height:1.5;padding:7px 9px;border-radius:4px;border:1px solid {{ m.border }};background:{{ m.bg }};white-space:pre-wrap">{{ m.text }}</div>
+<sc-if value="{{ m.hasFacts }}" hint-placeholder-val="{{ false }}">
+<div class="num" style="width:97%;font-size:10px;opacity:.55;padding:4px 8px;border-left:2px solid var(--color-accent);background:var(--color-bg)">{{ m.facts }}</div>
+</sc-if>
+<sc-for list="{{ m.sources }}" as="s" hint-placeholder-count="0">
+<div style="width:97%;display:flex;align-items:baseline;gap:6px;font-size:10px;padding:3px 8px;border:1px solid var(--color-divider);border-radius:4px;background:var(--color-bg)">
+<span class="num" style="opacity:.6">{{ s.date }}</span>
+<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ s.vendor }}</span>
+<span class="num">{{ s.total }}</span>
+</div>
+</sc-for>
+</div>
+</sc-for>
+</div>
+
+<div style="flex:none;border-top:1px solid var(--color-divider);padding:8px 13px 10px">
+<div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:7px">
+<sc-for list="{{ prompts }}" as="p" hint-placeholder-count="3">
+<button class="btn btn-secondary" style="font-size:10.5px;padding:3px 8px" onClick="{{ p.ask }}">{{ p.label }}</button>
+</sc-for>
+</div>
+<div style="display:flex;gap:6px">
+<input class="input" style="flex:1;background:var(--color-bg)" placeholder="Bu müşteriye dair sorun…" value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onKey }}">
+<button class="btn btn-primary" onClick="{{ send }}">{{ sendLabel }}</button>
+</div>
+</div>
+</div>
+
+</div>
+</sc-if>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = {
+    view: 'list', clientId: null, client: null, year: null,
+    loading: true, search: '',
+    clients: [], sum: null, cats: [], months: [], recurring: [], ledger: [],
+    tahakkuklar: [],
+    draft: '', asking: false, hover: null, useLlm: true,
+    chat: []
+  };
+
+  CATS = {
+    telekom: 'var(--color-accent-600)', enerji: 'var(--color-accent-300)',
+    abonelik: 'var(--color-accent-800)', elektronik: 'var(--color-neutral-800)',
+    ev: 'var(--color-accent-400)', market: 'var(--color-neutral-600)',
+    'yeme-içme': 'var(--color-accent-500)', giyim: 'var(--color-neutral-400)',
+    ulaşım: 'var(--color-accent-700)', sağlık: 'var(--color-neutral-700)',
+    sigorta: 'var(--color-accent-200)', 'kitap-medya': 'var(--color-neutral-500)',
+    ofis: 'var(--color-accent-900)', hizmet: 'var(--color-neutral-500)',
+    diğer: 'var(--color-neutral-300)'
+  };
+  KIND = { kdv: 'KDV', damga: 'Damga', muhtasar: 'Muhtasar', gecici: 'Geçici',
+           kurumlar: 'Kurumlar', gelir: 'Gelir', gelir_stopaj: 'Stopaj', mtv: 'MTV' };
+
+  fmt(n) {
+    return (n ?? 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' TL';
+  }
+  shortVendor(v) {
+    if (!v) return '';
+    return v.replace(/\s+(A\.Ş\.|Ltd\. Şti\.|Limited Şirketi|Sanayi ve Ticaret.*|Elektronik Hizmetler ve Ticaret.*|İletişim Hizmetleri.*|Hizmetleri.*)$/u, '').trim() ||
+      v.split(' ').slice(0, 3).join(' ');
+  }
+  trDate(iso) { return iso ? iso.split('-').reverse().join('.') : '—'; }
+
+  async componentDidMount() { await this.loadClients(); }
+
+  async loadClients() {
+    try {
+      const clients = await fetch('/api/clients').then(r => r.json());
+      this.setState({ clients, loading: false });
+    } catch (e) {
+      this.setState({ loading: false });
+    }
+  }
+
+  // Every request carries the client scope. The server enforces it too -- this is a
+  // confidentiality boundary, not a display filter -- but sending it consistently is
+  // what keeps the two in agreement.
+  scoped(path) {
+    const id = this.state.clientId;
+    const year = this.state.year;
+    const sep = path.includes('?') ? '&' : '?';
+    let q = id === null ? '' : `${sep}client=${encodeURIComponent(id)}`;
+    if (year) q += `${q ? '&' : sep}year=${year}`;
+    return path + q;
+  }
+
+  async openClient(client) {
+    this.setState({
+      view: 'client', clientId: client.id, client, year: null,
+      loading: true, chat: [{ who: 'Yardımcı', text: client.label + ' için kayıtlar yüklendi. Bu müşteriye dair soru sorabilirsiniz.' }]
+    });
+    await this.loadClientData();
+  }
+
+  async loadClientData() {
+    try {
+      const [sum, cats, months, recurring, ledger] = await Promise.all([
+        fetch(this.scoped('/api/summary')).then(r => r.json()),
+        fetch(this.scoped('/api/by-category')).then(r => r.json()),
+        fetch(this.scoped('/api/by-month')).then(r => r.json()),
+        fetch(this.scoped('/api/recurring')).then(r => r.json()),
+        fetch(this.scoped('/api/invoices?limit=300')).then(r => r.json())
+      ]);
+      let tahakkuklar = [];
+      if (this.state.clientId !== null && this.state.clientId >= 0) {
+        const y = this.state.year ? `?year=${this.state.year}` : '';
+        tahakkuklar = await fetch(`/api/clients/${this.state.clientId}/declarations${y}`)
+          .then(r => r.json()).catch(() => []);
+      }
+      this.setState({ loading: false, sum, cats, months, recurring, ledger, tahakkuklar });
+    } catch (e) {
+      this.setState({ loading: false });
+    }
+  }
+
+  back = () => this.setState({ view: 'list', clientId: null, client: null, year: null, chat: [] });
+  onSearch = (e) => this.setState({ search: e.target.value });
+  pickYear = (year) => async () => { this.setState({ year }); await this.loadClientData(); };
+
+  say(who, text, extra) {
+    this.setState(s => ({ chat: [...s.chat, { who, text, ...(extra || {}) }] }));
+  }
+
+  onDraft = (e) => this.setState({ draft: e.target.value });
+  onKey = (e) => { if (e.key === 'Enter' && e.target.value.trim()) this.ask(e.target.value.trim()); };
+  send = () => { if (this.state.draft.trim()) this.ask(this.state.draft.trim()); };
+  setAi = () => this.setState({ useLlm: true });
+  setFast = () => this.setState({ useLlm: false });
+
+  async ask(question) {
+    if (this.state.asking) return;
+    const history = this.state.chat.filter(m => m.text)
+      .map(m => ({ role: m.who === 'Siz' ? 'user' : 'assistant', content: m.text }));
+    this.setState(s => ({ draft: '', asking: true, chat: [...s.chat, { who: 'Siz', text: question }] }));
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [...history, { role: 'user', content: question }],
+          use_llm: this.state.useLlm,
+          client_id: this.state.clientId
+        })
+      });
+      if (!res.ok) {
+        this.setState({ asking: false });
+        if (res.status === 405 || res.status === 404) {
+          this.say('Yardımcı', 'Sunucu bu isteği tanımıyor — büyük ihtimalle eski ' +
+            'sürüm çalışıyor. Sunucuyu durdurup "python main.py --serve" ile yeniden başlatın.');
+          return;
+        }
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        this.say('Yardımcı', err.detail || 'Bir hata oluştu.');
+        return;
+      }
+      const data = await res.json();
+      this.setState({ asking: false });
+      this.say('Yardımcı', data.text, {
+        facts: data.source === 'router+llm' ? data.facts : null,
+        sources: (data.sources || []).map(s => ({
+          date: s.date, vendor: this.shortVendor(s.vendor),
+          total: this.fmt(s.total_amount).replace(' TL', '')
+        }))
+      });
+    } catch (e) {
+      this.setState({ asking: false });
+      this.say('Yardımcı', 'Sunucuya bağlanılamadı: ' + e.message);
+    }
+  }
+
+  renderVals() {
+    const st = this.state;
+    const acc = 'var(--color-accent)';
+    const sum = st.sum || {};
+
+    // ---- client list -------------------------------------------------------------
+    const q = st.search.trim().toLowerCase();
+    const shown = st.clients.filter(c =>
+      !q || (c.label || '').toLowerCase().includes(q) || (c.tax_id || '').includes(q));
+    const clientRows = shown.map(c => ({
+      label: c.label, taxId: c.tax_id || '—', invoices: c.invoices,
+      totalStr: this.fmt(c.total).replace(' TL', ''),
+      flaggedLabel: c.flagged ? c.flagged : '—',
+      flaggedColor: c.flagged ? 'var(--color-accent-700)' : 'inherit',
+      years: (c.years || []).join(', ') || '—',
+      dot: c.flagged ? acc : 'var(--color-neutral-300)',
+      open: () => this.openClient(c)
+    }));
+
+    // ---- client workspace --------------------------------------------------------
+    const cats = st.cats.map(c => ({
+      category: c.category, toplamStr: this.fmt(c.toplam).replace(' TL', ''),
+      color: this.CATS[c.category] || 'var(--color-neutral-400)'
+    }));
+
+    const monthMax = Math.max(1, ...st.months.map(m => m.toplam));
+    const months = st.months.map(m => ({
+      title: m.ay + ' · ' + this.fmt(m.toplam),
+      pctShort: Math.max(m.toplam / monthMax * 100, 4),
+      hover: () => this.setState({ hover: m.ay + ' · ' + this.fmt(m.toplam) + ' · ' + m.adet + ' fatura' })
+    }));
+
+    const recurring = st.recurring.map(r => ({
+      vendorShort: this.shortVendor(r.vendor), adet: r.adet,
+      gun: Math.round(r.ortalama_gun), aylikStr: this.fmt(r.aylik_ortalama).replace(' TL', '')
+    }));
+
+    const ledger = st.ledger.map(i => ({
+      dateTr: this.trDate(i.date),
+      vendorShort: this.shortVendor(i.vendor), category: i.category || 'diğer',
+      taxStr: this.fmt(i.tax_amount).replace(' TL', ''),
+      totalStr: this.fmt(i.total_amount).replace(' TL', ''),
+      color: this.CATS[i.category] || 'var(--color-neutral-400)',
+      status: i.needs_review ? 'İncele' : 'Tamam',
+      tagClass: i.needs_review ? 'tag tag-outline' : 'tag tag-neutral'
+    }));
+
+    const tahakkuklar = st.tahakkuklar.map(t => ({
+      kind: this.KIND[t.kind] || (t.kind || '—'),
+      period: t.period || '—',
+      receiptNo: t.receipt_no || t.filename,
+      // A receipt whose rows did not reconcile shows a dash rather than a number the
+      // extractor is not confident about -- this figure is money owed.
+      payableStr: t.needs_review ? '—' : this.fmt(t.payable).replace(' TL', ''),
+      dueStr: this.trDate(t.due_date),
+      status: t.needs_review ? 'İncele' : 'Tamam',
+      tagClass: t.needs_review ? 'tag tag-outline' : 'tag tag-neutral'
+    }));
+
+    const clientYears = (st.client && st.client.years) || [];
+    const years = [{ label: 'Tümü', value: null }]
+      .concat(clientYears.map(y => ({ label: String(y), value: y })))
+      .map(y => ({
+        label: y.label, pick: this.pickYear(y.value),
+        color: st.year === y.value ? acc : 'inherit',
+        shadow: st.year === y.value ? 'inset 0 0 0 1px ' + acc : 'none'
+      }));
+
+    const chat = st.chat.map(m => ({
+      who: m.who, text: m.text,
+      facts: m.facts || '', hasFacts: !!m.facts, sources: m.sources || [],
+      align: m.who === 'Siz' ? 'flex-end' : 'flex-start',
+      border: m.who === 'Siz' ? acc : 'var(--color-divider)',
+      bg: m.who === 'Siz' ? 'transparent' : 'var(--color-bg)'
+    }));
+    if (st.asking) {
+      chat.push({ who: 'Yardımcı', text: st.useLlm ? 'düşünüyor…' : 'hesaplıyor…',
+        facts: '', hasFacts: false, sources: [], align: 'flex-start',
+        border: 'var(--color-divider)', bg: 'var(--color-bg)' });
+    }
+
+    const askNow = (text) => () => this.ask(text);
+    const totalClients = st.clients.reduce((s, c) => s + (c.total || 0), 0);
+    const totalInvoices = st.clients.reduce((s, c) => s + (c.invoices || 0), 0);
+
+    return {
+      isList: st.view === 'list',
+      isClient: st.view === 'client',
+
+      headline: st.view === 'list'
+        ? `${st.clients.length} müşteri · ${totalInvoices} fatura · ${this.fmt(totalClients)}`
+        : `${sum.invoices ?? 0} fatura · ${this.fmt(sum.total)} · KDV ${this.fmt(sum.tax)} · ${sum.flagged ?? 0} işaretli`,
+
+      search: st.search, onSearch: this.onSearch,
+      clientRows,
+      clientCountLabel: `${shown.length} / ${st.clients.length}`,
+      clientNote: st.loading ? 'Yükleniyor…'
+        : (st.clients.length ? 'Bir müşteriye tıklayarak çalışma alanını açın.'
+           : 'Hiç müşteri yok — "main.py --ingest-archive <klasör>" ile arşiv yükleyin.'),
+
+      client: {
+        label: (st.client && st.client.label) || '',
+        meta: st.client
+          ? [st.client.tax_id, st.client.form, st.client.city].filter(Boolean).join(' · ')
+          : ''
+      },
+      back: this.back,
+      years,
+
+      cats, months, recurring, ledger, tahakkuklar,
+      hasTahakkuk: tahakkuklar.length > 0,
+      tahakkukNote: tahakkuklar.length
+        ? `${tahakkuklar.length} kayıt`
+        : 'bu dönemde tahakkuk fişi yok',
+      recTotalStr: this.fmt(st.recurring.reduce((s, r) => s + (r.aylik_ortalama || 0), 0)).replace(' TL', ''),
+      ledgerNote: st.loading ? 'Yükleniyor…' : `${ledger.length} fatura gösteriliyor.`,
+      hoverReadout: st.hover || 'bir aya gelin',
+      clearHover: () => this.setState({ hover: null }),
+
+      chat,
+      draft: st.draft, onDraft: this.onDraft, onKey: this.onKey, send: this.send,
+      sendLabel: st.asking ? '…' : 'Sor',
+      prompts: [
+        { label: 'Toplam harcama', ask: askNow('Toplam ne kadar harcadı?') },
+        { label: 'Düzenli ödemeler', ask: askNow('Düzenli ödemeler neler?') },
+        { label: 'En pahalı fatura', ask: askNow('En pahalı fatura hangisi?') }
+      ],
+      setAi: this.setAi, setFast: this.setFast,
+      aiColor: st.useLlm ? acc : 'inherit',
+      aiShadow: st.useLlm ? 'inset 0 0 0 1px ' + acc : 'none',
+      fastColor: st.useLlm ? 'inherit' : acc,
+      fastShadow: st.useLlm ? 'none' : 'inset 0 0 0 1px ' + acc,
+      modeNote: st.useLlm
+        ? 'Sayılar veritabanından hesaplanır, yanıtı model yazar (~30 sn).'
+        : 'Doğrudan veritabanı yanıtı — anında, model kullanılmaz.'
+    };
+  }
+}
+</script>
+</body>
+</html>

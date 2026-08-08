@@ -1,0 +1,21 @@
+                                                          e-ARŞİV FATURA
+
+Turkcell İletişim Hizmetleri A.Ş.
+Vergi Dairesi                    : Büyük Mükellefler
+Vergi Kimlik No                  : 8710365349
+Adres                            : [GIZLENDI]
+
+Fatura No                        : TCL2026000998877
+Fatura Tarihi                    : 21.04.2026
+Fatura Dönemi                    : 21.03.2026 - 20.04.2026
+Para Birimi                      : TRY
+Ödeme Şekli                      : OTOMATIK ODEME
+
+Hizmet Açıklaması                                          Tutar
+Aylık Paket Ücreti                                       620,00 TL
+Ek Kullanım Bedeli                                         4,00 TL
+
+                                   Mal Hizmet Toplam Tutarı          624,00 TL
+                                   Hesaplanan KDV(%20)               124,80 TL
+                                   Toplam Vergi Tutarı               124,80 TL
+                                   Ödenecek Tutar                    748,80 TL
