@@ -456,3 +456,127 @@ def test_pretty_folder_strips_the_ordering_prefix():
     assert archive.pretty_folder("1_Gelir_Faturalari") == "Gelir Faturalari"
     assert archive.pretty_folder("5_Banka_Ekstreleri") == "Banka Ekstreleri"
     assert archive.pretty_folder("belgeler") == "belgeler"
+
+
+# --- the archive is the source of truth, so the database has to follow it -------------
+
+
+def _make_pdf(lines: list[str]) -> bytes:
+    """Minimal one-page PDF, mirroring tests/test_pdf_text.py's builder."""
+    text_ops = ["BT", "/F1 11 Tf", "50 740 Td", "14 TL"]
+    for line in lines:
+        escaped = line.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
+        text_ops.append(f"({escaped}) Tj T*")
+    text_ops.append("ET")
+    stream = "\n".join(text_ops).encode("latin-1")
+
+    objects = [
+        b"<</Type/Catalog/Pages 2 0 R>>",
+        b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+        b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]"
+        b"/Resources<</Font<</F1 4 0 R>>>>/Contents 5 0 R>>",
+        b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
+        b"<</Length %d>>\nstream\n" % len(stream) + stream + b"\nendstream",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % number + body + b"\nendobj\n"
+    xref_at = len(out)
+    out += b"xref\n0 %d\n" % (len(objects) + 1)
+    out += b"0000000000 65535 f \n"
+    for offset in offsets:
+        out += b"%010d 00000 n \n" % offset
+    out += b"trailer\n<</Size %d/Root 1 0 R>>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objects) + 1, xref_at,
+    )
+    return bytes(out)
+
+
+#: A real invoice PDF, because these tests run the extraction pipeline rather than the
+#: walker alone -- a stub "%PDF-1.4" yields no invoice number and is never stored.
+def _invoice_pdf_bytes(no="F1"):
+    return _make_pdf([
+        "ORNEK TEDARIK LIMITED SIRKETI", "e-ARSIV FATURA",
+        f"FATURA NO: {no}", "FATURA TARIHI: 15.01.2026",
+        "VERGI KIMLIK NO: 1234567890",
+        "MAL/HIZMET TOPLAM TUTARI: 1.000,00 TL",
+        "HESAPLANAN KDV(%20): 200,00 TL",
+        "ODENECEK TUTAR: 1.200,00 TL", "PARA BIRIMI: TRY",
+    ])
+
+
+def _archive(tmp_path, client="111 - X", month="01_Ocak", name="a.pdf", no="F1"):
+    folder = tmp_path / client / "2026" / month / "1_Gelir_Faturalari"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / name).write_bytes(_invoice_pdf_bytes(no))
+    return folder / name
+
+
+def test_moving_a_document_updates_its_month_and_path(tmp_path):
+    """Identity is (client_id, content_hash), so INSERT OR IGNORE did nothing on a move:
+    the row kept January and a path to a file that was no longer there."""
+    src = tmp_path / "111 - X" / "2026" / "01_Ocak" / "4_Tahakkuklar" / "t.pdf"
+    src.parent.mkdir(parents=True)
+    src.write_bytes(_make_pdf(["TAHAKKUK FISI", "Ana Vergi Kodu 0015"]))
+
+    conn = db.connect(tmp_path / "move.db")
+    pipeline.ingest_archive(conn, tmp_path)
+    assert conn.execute("SELECT doc_month FROM declarations").fetchone()["doc_month"] == 1
+
+    dst = src.parent.parent.parent / "02_Şubat" / "4_Tahakkuklar" / "t.pdf"
+    dst.parent.mkdir(parents=True)
+    src.rename(dst)
+    pipeline.ingest_archive(conn, tmp_path)
+
+    row = conn.execute("SELECT doc_month, source_path FROM declarations").fetchone()
+    assert row["doc_month"] == 2
+    assert "02_" in row["source_path"]
+    assert conn.execute("SELECT COUNT(*) n FROM declarations").fetchone()["n"] == 1
+    conn.close()
+
+
+def test_a_deleted_file_leaves_the_database(tmp_path):
+    """Otherwise its amount keeps counting towards every total forever."""
+    pdf = _archive(tmp_path)
+    conn = db.connect(tmp_path / "prune.db")
+    pipeline.ingest_archive(conn, tmp_path)
+    assert conn.execute("SELECT COUNT(*) n FROM invoices").fetchone()["n"] == 1
+
+    pdf.unlink()
+    report = pipeline.ingest_archive(conn, tmp_path)
+    assert conn.execute("SELECT COUNT(*) n FROM invoices").fetchone()["n"] == 0
+    assert len(report.removed) == 1
+    conn.close()
+
+
+def test_pruning_never_touches_another_clients_rows(tmp_path):
+    """--client mehmet must not delete everyone else. The scope guard is the whole
+    reason this is safe to do automatically."""
+    _archive(tmp_path, client="111 - Bir", no="A1")
+    _archive(tmp_path, client="222 - Iki", no="B1")
+    conn = db.connect(tmp_path / "scope.db")
+    pipeline.ingest_archive(conn, tmp_path)
+    assert conn.execute("SELECT COUNT(*) n FROM invoices").fetchone()["n"] == 2
+
+    # Re-ingest only one client, with the other's files untouched on disk.
+    report = pipeline.ingest_archive(conn, tmp_path, only_client="111 - Bir")
+    assert conn.execute("SELECT COUNT(*) n FROM invoices").fetchone()["n"] == 2
+    assert report.removed == []
+    conn.close()
+
+
+def test_pruning_is_confined_to_the_ingested_root(tmp_path):
+    """Ingesting a different folder must not delete rows sourced from elsewhere."""
+    _archive(tmp_path / "archive_a")
+    conn = db.connect(tmp_path / "roots.db")
+    pipeline.ingest_archive(conn, tmp_path / "archive_a")
+    assert conn.execute("SELECT COUNT(*) n FROM invoices").fetchone()["n"] == 1
+
+    other = tmp_path / "archive_b"
+    _archive(other, client="333 - Uc", no="C1")
+    report = pipeline.ingest_archive(conn, other)
+    assert conn.execute("SELECT COUNT(*) n FROM invoices").fetchone()["n"] == 2
+    assert report.removed == []
+    conn.close()

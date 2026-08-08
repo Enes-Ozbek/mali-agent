@@ -139,6 +139,10 @@ class ArchiveReport:
     clients: list[str] = field(default_factory=list)
     problems: list[tuple[str, str]] = field(default_factory=list)
     misfiled: list[str] = field(default_factory=list)
+    #: Rows whose file is no longer in the archive. The folder is the source of truth,
+    #: so a deleted PDF has to leave the database too -- otherwise its amount keeps
+    #: counting towards every total forever.
+    removed: list[str] = field(default_factory=list)
 
 
 def ingest_archive(
@@ -178,7 +182,47 @@ def ingest_archive(
         if on_progress:
             on_progress(item, client)
 
+    _prune_missing(conn, root, walked, report)
     return report
+
+
+def _prune_missing(conn, root, walked, report: ArchiveReport) -> None:
+    """Drop rows whose file has left the archive.
+
+    Scoped deliberately: only rows whose source_path is under the root that was just
+    walked, and only when that exact path was not seen during the walk. Without the
+    scope an `--ingest-archive ... --client mehmet` run would delete every other
+    client's rows, and an `--ingest <one folder>` run would delete the whole database.
+
+    Verified against the disk rather than the walk alone -- a file the walker skipped
+    for another reason (a spreadsheet in an invoice folder) is still present and must
+    not be treated as deleted.
+    """
+    root_prefix = str(Path(root).resolve())
+    seen = {str(item.path.resolve()) for item in walked.items}
+
+    for table in ("invoices", "declarations", "documents"):
+        rows = conn.execute(
+            f"SELECT id, source_path FROM {table} WHERE source_path IS NOT NULL"
+        ).fetchall()
+        stale = []
+        for row in rows:
+            path = row["source_path"]
+            try:
+                resolved = str(Path(path).resolve())
+            except OSError:
+                continue
+            if not resolved.startswith(root_prefix):
+                continue          # outside this ingest's scope; not ours to remove
+            if resolved in seen or Path(path).is_file():
+                continue          # still there
+            stale.append((row["id"], path))
+
+        for row_id, path in stale:
+            conn.execute(f"DELETE FROM {table} WHERE id = ?", (row_id,))
+            report.removed.append(path)
+    if report.removed:
+        conn.commit()
 
 
 def _ingest_invoice(conn, item, client, report: ArchiveReport, *, use_llm: bool) -> None:
@@ -263,17 +307,20 @@ def _record_declaration(conn, item, client) -> int:
     accrued = sum(ln.accrued for ln in parsed.lines if ln.accrued is not None) or None
     offset = sum(ln.offset for ln in parsed.lines if ln.offset is not None) or None
 
-    return _insert_ignore(
-        conn,
-        "INSERT OR IGNORE INTO declarations "
-        "(client_id, kind, period, accrued, offset_amount, payable, due_date, "
-        " issue_date, receipt_no, taxpayer_tax_id, lines, doc_year, doc_month, doc_type, "
-        " source_path, content_hash, raw_text, needs_review, review_reasons, ingested_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (client.id, parsed.kind, parsed.period, accrued, offset, parsed.total_payable,
-         parsed.due_date, parsed.issue_date, parsed.receipt_no, parsed.taxpayer_tax_id,
-         lines, item.year, item.month, item.doc_type, str(item.path), doc.content_hash, doc.text,
-         int(bool(reasons)), json.dumps(reasons, ensure_ascii=False), _now()),
+    return _upsert(
+        conn, "declarations",
+        {"client_id": client.id, "content_hash": doc.content_hash},
+        {
+            "kind": parsed.kind, "period": parsed.period, "accrued": accrued,
+            "offset_amount": offset, "payable": parsed.total_payable,
+            "due_date": parsed.due_date, "issue_date": parsed.issue_date,
+            "receipt_no": parsed.receipt_no, "taxpayer_tax_id": parsed.taxpayer_tax_id,
+            "lines": lines, "doc_year": item.year, "doc_month": item.month,
+            "doc_type": item.doc_type, "source_path": str(item.path),
+            "raw_text": doc.text, "needs_review": int(bool(reasons)),
+            "review_reasons": json.dumps(reasons, ensure_ascii=False),
+            "ingested_at": _now(),
+        },
     )
 
 
@@ -289,21 +336,44 @@ def _record_document(conn, item, client) -> int:
     else:
         content_hash = hashlib.sha256(item.path.read_bytes()).hexdigest()
 
-    return _insert_ignore(
-        conn,
-        "INSERT OR IGNORE INTO documents "
-        "(client_id, doc_type, doc_year, doc_month, filename, source_path, "
-        " content_hash, ingested_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (client.id, item.doc_type, item.year, item.month, item.path.name,
-         str(item.path), content_hash, _now()),
+    return _upsert(
+        conn, "documents",
+        {"client_id": client.id, "content_hash": content_hash},
+        {
+            "doc_type": item.doc_type, "doc_year": item.year, "doc_month": item.month,
+            "filename": item.path.name, "source_path": str(item.path),
+            "ingested_at": _now(),
+        },
     )
 
 
-def _insert_ignore(conn, sql: str, params: tuple) -> int:
-    cursor = conn.execute(sql, params)
+def _upsert(conn, table: str, identity: dict, values: dict) -> int:
+    """Insert, or update the existing row with the same identity.
+
+    INSERT OR IGNORE was wrong here. Identity is (client_id, content_hash), so moving a
+    file from 01_Ocak to 02_Şubat produced no insert *and* no update: the row kept the
+    old doc_month and a source_path pointing at a file that no longer exists. The tree
+    then listed the document under the wrong month and the preview 404'd.
+
+    Returns 1 for a new row, 0 for an update, matching the old counting.
+    """
+    where = " AND ".join(f"{k} = :{k}" for k in identity)
+    existing = conn.execute(
+        f"SELECT id FROM {table} WHERE {where}", identity).fetchone()
+
+    if existing:
+        assignments = ", ".join(f"{k} = :{k}" for k in values)
+        conn.execute(f"UPDATE {table} SET {assignments} WHERE id = :id",
+                     {**values, "id": existing["id"]})
+        conn.commit()
+        return 0
+
+    payload = {**identity, **values}
+    columns = ", ".join(payload)
+    placeholders = ", ".join(f":{k}" for k in payload)
+    conn.execute(f"INSERT INTO {table} ({columns}) VALUES ({placeholders})", payload)
     conn.commit()
-    return cursor.rowcount or 0
+    return 1
 
 
 def _now() -> str:
