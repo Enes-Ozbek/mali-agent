@@ -42,10 +42,14 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
    auto-sized, so a long chat transcript grows the row past the viewport and pushes
    the message input below the fold. min-height:0 on the container alone does not
    constrain the row. */
-.cols{display:grid;grid-template-columns:236px minmax(0,1fr) 318px;grid-template-rows:minmax(0,1fr);flex:1;min-height:0}
+/* The shell owns the assistant column, so it keeps the same width and right edge on
+   both the client list and a client's workspace -- the panel must not appear to move
+   when you open a client. Only the area to its left swaps. */
+.shell{display:grid;grid-template-columns:minmax(0,1fr) 318px;grid-template-rows:minmax(0,1fr);flex:1;min-height:0}
+.cols{display:grid;grid-template-columns:236px minmax(0,1fr);grid-template-rows:minmax(0,1fr);height:100%;min-height:0}
 /* Effective viewport shrinks under display scaling; give the ledger the space back. */
-@media (max-width:1500px){.cols{grid-template-columns:208px minmax(0,1fr) 288px}}
-@media (max-width:1200px){.cols{grid-template-columns:184px minmax(0,1fr) 264px}}
+@media (max-width:1500px){.shell{grid-template-columns:minmax(0,1fr) 288px}.cols{grid-template-columns:208px minmax(0,1fr)}}
+@media (max-width:1200px){.shell{grid-template-columns:minmax(0,1fr) 264px}.cols{grid-template-columns:184px minmax(0,1fr)}}
 </style>
 </helmet>
 
@@ -62,8 +66,11 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 <span class="num" style="margin-left:auto;font-size:11.5px;opacity:.65">{{ headline }}</span>
 </div>
 
+<div class="shell">
+<div style="display:flex;flex-direction:column;min-height:0;overflow:hidden">
+
 <sc-if value="{{ isList }}" hint-placeholder-val="{{ true }}">
-<div class="scroll" style="flex:1;overflow:auto;padding:18px 22px">
+<div class="scroll" style="height:100%;overflow:auto;padding:18px 22px">
 <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
 <h4 style="margin:0">Müşteriler</h4>
 <span class="num" style="font-size:11.5px;opacity:.55">{{ clientCountLabel }}</span>
@@ -235,7 +242,12 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 </sc-if>
 </div>
 
-<div style="display:flex;flex-direction:column;min-height:0;background:var(--color-surface)">
+</div>
+</sc-if>
+
+</div>
+
+<div style="display:flex;flex-direction:column;min-height:0;background:var(--color-surface);border-left:1px solid var(--color-divider)">
 <div style="padding:8px 13px;border-bottom:1px solid var(--color-divider);flex:none">
 <div style="display:flex;align-items:baseline;gap:8px">
 <h4 style="margin:0">Yardımcı</h4>
@@ -273,14 +285,13 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 </sc-for>
 </div>
 <div style="display:flex;gap:6px">
-<input class="input" style="flex:1;background:var(--color-bg)" placeholder="Bu müşteriye dair sorun…" value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onKey }}">
+<input class="input" style="flex:1;background:var(--color-bg)" placeholder="{{ chatPlaceholder }}" value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onKey }}">
 <button class="btn btn-primary" onClick="{{ send }}">{{ sendLabel }}</button>
 </div>
 </div>
 </div>
 
 </div>
-</sc-if>
 
 </x-dc>
 <script type="text/x-dc" data-dc-script>
@@ -321,7 +332,20 @@ class Component extends DCLogic {
   }
   trDate(iso) { return iso ? iso.split('-').reverse().join('.') : '—'; }
 
-  async componentDidMount() { await this.loadClients(); }
+  // The transcript is replayed to /api/chat as `messages` on every turn, so it resets
+  // whenever the scope changes. Carrying turns from one client into another scope would
+  // put that client's figures in the prompt even though the server scopes retrieval
+  // correctly -- the reset is what keeps the two ends in agreement.
+  greetAll() {
+    return [{ who: 'Yardımcı', text: 'Büro geneli kayıtlar yüklendi. Tüm müşterileri '
+      + 'kapsayan soru sorabilir, ya da bir müşteriye tıklayıp yalnızca onun kayıtlarına '
+      + 'geçebilirsiniz.' }];
+  }
+
+  async componentDidMount() {
+    await this.loadClients();
+    this.setState({ chat: this.greetAll() });
+  }
 
   async loadClients() {
     try {
@@ -376,7 +400,10 @@ class Component extends DCLogic {
     }
   }
 
-  back = () => this.setState({ view: 'list', clientId: null, client: null, year: null, chat: [] });
+  back = () => this.setState({
+    view: 'list', clientId: null, client: null, year: null,
+    tab: 'genel', folder: null, fileStatus: '', chat: this.greetAll()
+  });
   onSearch = (e) => this.setState({ search: e.target.value });
   pickYear = (year) => async () => { this.setState({ year, folder: null }); await this.loadClientData(); };
 
@@ -670,11 +697,20 @@ class Component extends DCLogic {
       chat,
       draft: st.draft, onDraft: this.onDraft, onKey: this.onKey, send: this.send,
       sendLabel: st.asking ? '…' : 'Sor',
-      prompts: [
-        { label: 'Toplam harcama', ask: askNow('Toplam ne kadar harcadı?') },
-        { label: 'Düzenli ödemeler', ask: askNow('Düzenli ödemeler neler?') },
-        { label: 'En pahalı fatura', ask: askNow('En pahalı fatura hangisi?') }
-      ],
+      // clientId is null on the list view, so /api/chat answers across every client.
+      chatPlaceholder: st.view === 'list'
+        ? 'Tüm müşterilere dair sorun…' : 'Bu müşteriye dair sorun…',
+      prompts: st.view === 'list'
+        ? [
+            { label: 'Toplam', ask: askNow('Toplam ne kadar harcandı?') },
+            { label: 'Kategoriler', ask: askNow('Kategorilere göre dağılım nedir?') },
+            { label: 'En pahalı fatura', ask: askNow('En pahalı fatura hangisi?') }
+          ]
+        : [
+            { label: 'Toplam harcama', ask: askNow('Toplam ne kadar harcadı?') },
+            { label: 'Düzenli ödemeler', ask: askNow('Düzenli ödemeler neler?') },
+            { label: 'En pahalı fatura', ask: askNow('En pahalı fatura hangisi?') }
+          ],
       setAi: this.setAi, setFast: this.setFast,
       aiColor: st.useLlm ? acc : 'inherit',
       aiShadow: st.useLlm ? 'inset 0 0 0 1px ' + acc : 'none',
