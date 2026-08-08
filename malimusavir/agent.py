@@ -81,8 +81,12 @@ Kurallar:
 - Sana verilmeyen bir sayıyı asla uydurma. Veri yoksa "bu bilgi faturalarda yok" de.
 - Kısa ve net konuş. Türkçe yanıt ver. Para birimini "1.234,56 TL" biçiminde yaz.
 - Madde işareti kullanma, düz cümle kur. Markdown başlık kullanma.
-- Faturalar kullanıcıya aittir, sana değil. Kullanıcıya "siz" diye hitap et:
-  "ödediniz", "harcadınız" de — asla "ödedim" veya "harcadım" deme."""
+- HESAPLANAN VERİ'deki parantez içi KAPSAMI aynen koru. Veri "tüm müşteriler"
+  kapsamındaysa rakamı tek bir müşteriye ATFETME; "tüm müşteriler toplamında" de.
+  Veri bir müşteri adı taşıyorsa yanıtta o adı kullan, başka bir ad uydurma.
+- Kullanıcı bir mali müşavirdir; faturalar onun müşterilerine aittir. Bir müşteri
+  adı verildiyse üçüncü şahıs kullan ("Canan Aydın ... ödemiş"). Asla "ödedim"
+  veya "harcadım" deme."""
 
 _GROUNDED = """HESAPLANAN VERİ (veritabanından, doğrudur):
 {facts}
@@ -203,16 +207,24 @@ def _route_in_context(conn: sqlite3.Connection, question: str, previous: str | N
     """
     vendors = router.known_vendors(conn)
     categories = router.known_categories(conn)
-    parsed = router.classify(question, vendors=vendors, categories=categories)
+    clients = router.known_clients(conn)
+    parsed = router.classify(question, vendors=vendors, categories=categories,
+                             clients=clients)
 
     if previous and parsed.is_aggregate:
-        prior = router.classify(previous, vendors=vendors, categories=categories)
+        prior = router.classify(previous, vendors=vendors, categories=categories,
+                                clients=clients)
         if not parsed.vendors and prior.vendors:
             parsed.vendors = prior.vendors
         if not parsed.category and prior.category:
             parsed.category = prior.category
         if not parsed.since and not parsed.until and (prior.since or prior.until):
             parsed.since, parsed.until = prior.since, prior.until
+        # "Canan Aydın'ın kaç faturası var" then "listele onları" -- the follow-up names
+        # nobody, so without this it would list every client's invoices under a question
+        # the user clearly meant about Canan.
+        if not parsed.clients and prior.clients:
+            parsed.clients = prior.clients
 
     return router.answer(conn, parsed, client_id), parsed
 
@@ -245,9 +257,16 @@ def answer(
         return AgentReply(capabilities(conn, client_id=client_id), "agent", "help")
 
     prior_questions = [m["content"] for m in turns if m.get("role") == "user"]
-    computed, _parsed = _route_in_context(
+    computed, parsed = _route_in_context(
         conn, question, prior_questions[-1] if prior_questions else None, client_id
     )
+
+    # A question that names one client scopes retrieval to them as well, not just the
+    # aggregates. Without this, "Canan Aydın'ın vidalama seti hangi faturada" asked on
+    # the practice-wide page searches every client's invoices and answers about whoever
+    # happens to match -- the same wrong-subject failure the aggregates just fixed.
+    if len(parsed.clients) == 1 and (client_id is None or client_id == "none"):
+        client_id = parsed.clients[0].id
 
     if computed is not None:
         if not use_llm:

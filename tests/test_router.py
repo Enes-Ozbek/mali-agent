@@ -219,3 +219,124 @@ def test_empty_scope_reports_no_invoices(conn):
 def test_semantic_question_returns_none(conn):
     """None is the signal to fall through to embeddings."""
     assert router.route(conn, "vidalama seti hangi faturada var") is None
+
+
+# --- naming a client in the question -------------------------------------------------
+#
+# The bug these cover, reported from the live app: asked "canan aydının kaç faturası
+# var" on the practice-wide page, the router answered with the *global* count (13) and
+# the model presented it as "Canan Aydın'ın 13 faturası vardır". The number was real and
+# the subject was wrong, which is worse than no answer -- so these assert both the
+# figure and the name attached to it.
+
+
+@pytest.fixture
+def practice(tmp_path):
+    """Two clients with different invoice counts, plus a client-owned vendor name."""
+    from malimusavir import clients as clients_mod
+
+    connection = db.connect(tmp_path / "practice.db")
+    canan = clients_mod.resolve(connection, "Canan Aydın")
+    clients_mod.set_metadata(connection, canan.id,
+                             display="Canan Aydın E-Ticaret ve Danışmanlık")
+    kaya = clients_mod.resolve(connection, "Kaya Yapı Mimarlık İnşaat Ltd. Şti")
+
+    rows = [
+        (canan.id, "C1", "2026-01-15", "Canan Aydın E-Ticaret", 3000.0),
+        (canan.id, "C2", "2026-02-11", "Canan Aydın E-Ticaret", 2160.0),
+        (canan.id, "C3", "2026-03-08", "Bir Tedarikçi Ltd.", 3840.0),
+        (kaya.id, "K1", "2026-01-10", "Çelik Hazır Beton A.Ş.", 120000.0),
+        (kaya.id, "K2", "2026-02-05", "Demir Çelik Malzeme", 78000.0),
+    ]
+    for client_id, no, when, vendor, total in rows:
+        invoice = ExtractedInvoice(
+            invoice_no=no, date=when, vendor=vendor, vendor_tax_id="1",
+            total_amount=total, tax_amount=round(total / 6, 2),
+            net_amount=round(total * 5 / 6, 2), category="hizmet", currency="TL",
+            content_hash=f"h-{no}", profile="test",
+        )
+        invoice.client_id = client_id
+        db.upsert_invoice(connection, invoice)
+
+    yield connection, canan.id, kaya.id
+    connection.close()
+
+
+def test_a_named_client_scopes_the_count(practice):
+    """The reported bug: this answered 5 (every client) and called it Canan's."""
+    connection, _, _ = practice
+    text = router.route(connection, "canan aydının kaç faturası var").text
+    assert "3 fatura" in text
+    assert "Canan Aydın" in text, "the figure must carry the name it belongs to"
+
+
+def test_a_named_client_scopes_the_total(practice):
+    connection, _, _ = practice
+    text = router.route(connection, "kaya yapının toplamı ne kadar").text
+    assert "198.000,00" in text          # 120000 + 78000, not the practice total
+    assert "Kaya" in text
+
+
+def test_an_unscoped_figure_says_it_covers_everyone(practice):
+    """Without the scope label a global number reads as one client's, which is exactly
+    how the reported answer went wrong."""
+    connection, _, _ = practice
+    text = router.route(connection, "toplam ne kadar harcandı").text
+    assert "207.000,00" in text          # 9.000 (Canan) + 198.000 (Kaya)
+    assert "tüm müşteriler" in text
+
+
+def test_a_client_page_ignores_no_client_named(practice):
+    connection, canan_id, _ = practice
+    text = router.route(connection, "kaç faturam var", canan_id).text
+    assert "3 fatura" in text
+    assert "Canan Aydın" in text
+
+
+def test_asking_about_another_client_from_a_clients_page_is_refused(practice):
+    """The page scope is the confidentiality boundary; answering with the page's client
+    under the name the user typed would repeat the wrong-subject bug."""
+    connection, _, kaya_id = practice
+    text = router.route(connection, "canan aydının kaç faturası var", kaya_id).text
+    assert "3 fatura" not in text and "2 fatura" not in text
+    assert "Kaya" in text and "Canan" in text
+
+
+def test_naming_a_client_does_not_also_filter_by_their_own_vendor_name(practice):
+    """A client's name is also the seller on their sales invoices. Left as a vendor
+    filter it would drop C3, the one thing Canan bought rather than sold."""
+    parsed = router.classify(
+        "canan aydının kaç faturası var",
+        vendors=router.known_vendors(practice[0]),
+        categories=router.known_categories(practice[0]),
+        clients=router.known_clients(practice[0]),
+    )
+    assert parsed.vendors == []
+    assert [c.label for c in parsed.clients] == ["Canan Aydın E-Ticaret ve Danışmanlık"]
+
+
+def test_listing_invoices_needs_no_vendor_or_category(practice):
+    """"listele o faturaları" used to fall through to semantic search, where the model
+    produced repetitive nonsense instead of a list."""
+    connection, _, _ = practice
+    answer = router.route(connection, "faturaları listele")
+    assert answer is not None
+    assert answer.intent is Intent.LIST
+    assert "5 fatura" in answer.text
+
+
+def test_a_content_question_still_goes_to_search_despite_a_list_word(practice):
+    """Enumerating dates and totals cannot answer "what is in them"."""
+    connection, _, _ = practice
+    assert router.route(connection, "hangi faturalarda ne var listele") is None
+
+
+def test_a_missing_vendor_name_is_not_printed_as_none(practice):
+    """Extraction fails to find a seller on some şahıs layouts; str(None) would show a
+    seller literally called "None"."""
+    connection, _, _ = practice
+    connection.execute("UPDATE invoices SET vendor = NULL WHERE invoice_no = 'C1'")
+    connection.commit()
+    text = router.route(connection, "faturaları listele").text
+    assert "None" not in text
+    assert "okunamadı" in text

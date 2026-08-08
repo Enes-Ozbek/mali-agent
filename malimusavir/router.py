@@ -65,7 +65,11 @@ INTENT_PATTERNS: tuple[tuple[Intent, tuple[str, ...]], ...] = (
     (Intent.SMALLEST, ("en ucuz", "en dusuk", "en kucuk")),
     (Intent.COUNT, ("kac fatura", "kac tane", "kac adet", "fatura sayisi", "kac faturam")),
     (Intent.TAX, ("kdv", "vergi")),
-    (Intent.TOTAL, ("toplam ne kadar", "ne kadar harca", "ne kadar ode", "toplam harca",
+    # "toplami ne kadar" needs its own entry: the possessive suffix means "toplam ne
+    # kadar" is not a substring of it, so "Kaya Yapı'nın toplamı ne kadar" fell through
+    # to semantic search and came back with nothing.
+    (Intent.TOTAL, ("toplam ne kadar", "toplami ne kadar", "toplami nedir",
+                    "ne kadar harca", "ne kadar ode", "toplam harca",
                     "toplam tutar", "ne kadar para", "toplam gider", "ne kadar tuttu")),
 )
 
@@ -73,8 +77,27 @@ INTENT_PATTERNS: tuple[tuple[Intent, tuple[str, ...]], ...] = (
 _LIST_MARKERS = ("hangi faturalar", "faturalari listele", "faturalarimi goster",
                  "hangilerinde", "listele", "goster")
 
+#: Words that make a listing request unambiguously about invoices, so "faturaları
+#: listele" is an aggregate even with no vendor or category to filter on.
+_INVOICE_WORDS = ("fatura", "belge", "kayit")
+
+#: Phrases asking what is *inside* invoices rather than which invoices exist. Only
+#: line-item search can answer these, so they stay semantic even when the sentence also
+#: carries a list word: "hangi faturalarda ne var listele" wants contents, and an
+#: enumeration of dates and totals would not answer it.
+_CONTENT_MARKERS = ("ne var", "neler var", "ne alin", "icinde", "icerik", "geciyor")
+
 _RELATIVE_PERIODS = ("bu ay", "gecen ay", "bu yil", "gecen yil", "son 3 ay", "son 6 ay",
                      "son 12 ay", "son bir yil")
+
+
+@dataclass(frozen=True)
+class ClientRef:
+    """A client the question could be about."""
+
+    id: int
+    label: str
+    tokens: frozenset[str] = field(default_factory=frozenset)
 
 
 @dataclass
@@ -88,6 +111,9 @@ class Question:
     since: str | None = None
     until: str | None = None
     matched: str | None = None      #: the phrase that triggered the intent
+    #: Clients named *in the question*, e.g. "canan aydının kaç faturası var". Distinct
+    #: from the client_id passed to answer(), which is the page the user is on.
+    clients: list[ClientRef] = field(default_factory=list)
 
     @property
     def is_aggregate(self) -> bool:
@@ -147,6 +173,70 @@ _GENERIC_NAME_STEMS = (
 
 def _is_generic(word: str) -> bool:
     return any(word.startswith(stem) for stem in _GENERIC_NAME_STEMS)
+
+
+#: Legal-form tokens that identify a company type, never a particular client.
+_CLIENT_STOP_TOKENS = frozenset((
+    "ltd", "sti", "as", "limited", "sirketi", "sirket", "anonim", "sahis", "kollektif",
+    "komandit", "vd", "ve",
+))
+
+
+def _client_tokens(text: str) -> frozenset[str]:
+    """The words in a name that could actually identify someone."""
+    words = set()
+    for word in fold_tr(text).replace(".", " ").replace("'", " ").split():
+        word = word.strip("-,;:")
+        if len(word) < 3 or word in _CLIENT_STOP_TOKENS or _is_generic(word):
+            continue
+        words.add(word)
+    return frozenset(words)
+
+
+def known_clients(conn: sqlite3.Connection) -> list[ClientRef]:
+    """Every client, with the words that would name them in a question.
+
+    Both the folder name and the display name contribute tokens: the archive folder may
+    be "Canan Aydın" while the display name is the full commercial title, and a question
+    can reasonably use either.
+    """
+    out = []
+    for row in conn.execute("SELECT id, name, display FROM clients"):
+        display = row["display"] or row["name"]
+        out.append(ClientRef(
+            id=row["id"], label=display,
+            tokens=_client_tokens(f"{row['name']} {row['display'] or ''}"),
+        ))
+    return out
+
+
+def _match_clients(folded_question: str, clients: list[ClientRef]) -> list[ClientRef]:
+    """Clients named in the question.
+
+    Prefix matching on whole words rather than raw substrings, because Turkish case
+    suffixes attach to the name ("Aydın" -> "Aydın'ın" -> folded "aydinin") while a bare
+    substring test would also fire on unrelated words that merely contain a short name.
+
+    A single token only counts when it is distinctive enough (4+ characters); shorter
+    names need a second token to agree, so a three-letter first name cannot capture the
+    question on its own.
+    """
+    q_words = [w.strip("'-.,;:?!") for w in folded_question.split()]
+    scored: list[tuple[int, int, ClientRef]] = []
+    for client in clients:
+        hits = [t for t in client.tokens if any(w.startswith(t) for w in q_words)]
+        if not hits:
+            continue
+        longest = max(len(t) for t in hits)
+        if longest >= 4 or len(hits) >= 2:
+            scored.append((len(hits), longest, client))
+    if not scored:
+        return []
+
+    # Keep every client that ties for the best evidence. Two genuinely equal matches
+    # mean the question is ambiguous, and answer() says so instead of picking one.
+    best = max((hits, longest) for hits, longest, _ in scored)
+    return [c for hits, longest, c in scored if (hits, longest) == best]
 
 
 def _match_vendors(folded_question: str, vendors: list[str]) -> list[str]:
@@ -236,27 +326,44 @@ def _month_window(year: int, month: int) -> tuple[str, str]:
 
 
 def classify(question: str, *, vendors: list[str] | None = None,
-             categories: list[str] | None = None, today: date | None = None) -> Question:
+             categories: list[str] | None = None, clients: list[ClientRef] | None = None,
+             today: date | None = None) -> Question:
     """Parse a Turkish question into an intent plus filters."""
     folded = fold_tr(question)
 
     matched_vendors = _match_vendors(folded, vendors or [])
+    matched_clients = _match_clients(folded, clients or [])
     category = _match_category(folded, categories or [])
     since, until = _match_period(folded, today)
+
+    # A client's own name is also the seller on their sales invoices, so "Zeynep
+    # Çelik'in kaç faturası var" matches both a client and a vendor. Naming a client
+    # means "scope to this taxpayer", not "and also keep only invoices they issued" --
+    # left in, the vendor filter would silently drop everything they bought.
+    if matched_clients:
+        client_words = frozenset().union(*(c.tokens for c in matched_clients))
+        matched_vendors = [v for v in matched_vendors
+                           if not (_client_tokens(v) & client_words)]
 
     for intent, phrases in INTENT_PATTERNS:
         for phrase in phrases:
             if phrase in folded:
                 return Question(intent, question, matched_vendors, category,
-                                since, until, phrase)
+                                since, until, phrase, matched_clients)
 
-    # A listing request only counts as an aggregate when it names something to filter on;
-    # "hangi faturada vidalama seti var" has no filter and belongs to semantic search.
-    if (matched_vendors or category) and any(m in folded for m in _LIST_MARKERS):
+    # A listing request counts as an aggregate when it names something to filter on, or
+    # when it says outright that invoices are what should be listed ("faturaları
+    # listele"). "hangi faturada vidalama seti var" carries no list marker and stays
+    # with semantic search, which is what can actually look inside line items.
+    asks_for_contents = any(m in folded for m in _CONTENT_MARKERS)
+    if not asks_for_contents and any(m in folded for m in _LIST_MARKERS) and (
+            matched_vendors or category or matched_clients
+            or any(w in folded for w in _INVOICE_WORDS)):
         return Question(Intent.LIST, question, matched_vendors, category,
-                        since, until, "liste")
+                        since, until, "liste", matched_clients)
 
-    return Question(Intent.SEMANTIC, question, matched_vendors, category, since, until)
+    return Question(Intent.SEMANTIC, question, matched_vendors, category, since, until,
+                    None, matched_clients)
 
 
 def _filtered(conn: sqlite3.Connection, parsed: Question,
@@ -272,9 +379,81 @@ def _filtered(conn: sqlite3.Connection, parsed: Question,
     return frame
 
 
-def _scope(parsed: Question) -> str:
+def _scope(parsed: Question, client_label: str | None = None) -> str:
     filters = parsed.filters()
+    if client_label:
+        # First, and always present when more than one client exists. This string is
+        # what agent.py hands the model as ground truth, so a figure that reaches the
+        # user has its subject attached to it rather than being a bare number the model
+        # is free to attribute to whoever the question mentioned.
+        filters.insert(0, client_label)
     return f" ({', '.join(filters)})" if filters else ""
+
+
+def _client_label(conn: sqlite3.Connection, client_id: int | str | None) -> str | None:
+    if client_id is None or client_id == stats.UNASSIGNED:
+        return None
+    row = conn.execute("SELECT name, display FROM clients WHERE id = ?",
+                       (int(client_id),)).fetchone()
+    return (row["display"] or row["name"]) if row else None
+
+
+def resolve_client_scope(
+    conn: sqlite3.Connection, parsed: Question, client_id: int | str | None,
+) -> tuple[int | str | None, str | None, str | None]:
+    """Work out which client a question is really about.
+
+    Returns ``(effective_client_id, label, refusal)``. A refusal is returned instead of
+    an answer when the question cannot be attributed to one client with confidence --
+    answering anyway is how a correct number ends up under the wrong name.
+    """
+    named = parsed.clients
+
+    if len(named) > 1:
+        return None, None, (
+            "Hangi müşteriyi kastettiğinizi anlayamadım: "
+            + ", ".join(c.label for c in named)
+            + ". Lütfen tek bir müşteri adı yazın."
+        )
+
+    if named:
+        target = named[0]
+        on_a_client_page = client_id is not None and client_id != stats.UNASSIGNED
+        if on_a_client_page and str(client_id) != str(target.id):
+            # The page scope is the confidentiality boundary the server enforces, so it
+            # wins. Silently answering with the page's client under the name the user
+            # typed is the exact failure this function exists to prevent.
+            current = _client_label(conn, client_id) or "bu müşteri"
+            return None, None, (
+                f"Bu panel {current} kapsamında çalışıyor; {target.label} hakkında "
+                f"buradan yanıt veremem. {target.label} sayfasını açıp orada sorun."
+            )
+        return target.id, target.label, None
+
+    if client_id is not None and client_id != stats.UNASSIGNED:
+        return client_id, _client_label(conn, client_id), None
+
+    if client_id == stats.UNASSIGNED:
+        return client_id, "atanmamış faturalar", None
+
+    # Unscoped. Label it explicitly whenever more than one client exists, so a
+    # practice-wide figure can never be read as belonging to a single taxpayer.
+    total = conn.execute("SELECT COUNT(*) n FROM clients").fetchone()["n"]
+    return None, (f"tüm müşteriler, {total} müşteri" if total > 1 else None), None
+
+
+def _vendor_name(value) -> str:
+    """A seller name fit to show.
+
+    Extraction genuinely fails to find one on some layouts -- notably şahıs şirketi
+    invoices, whose header carries a person's name with no "Ltd. Şti."/"A.Ş." token for
+    the profile to anchor on. str() would print the literal "None" into an answer and
+    read as a real seller called None; say plainly that it could not be read.
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return "(satıcı adı okunamadı)"
+    text = str(value).strip()
+    return text or "(satıcı adı okunamadı)"
 
 
 def _rows(frame: pd.DataFrame) -> list[dict]:
@@ -297,8 +476,12 @@ def answer(conn: sqlite3.Connection, parsed: Question,
     if not parsed.is_aggregate:
         return None
 
+    client_id, client_label, refusal = resolve_client_scope(conn, parsed, client_id)
+    if refusal is not None:
+        return Answer(refusal, [], parsed.intent)
+
     frame = _filtered(conn, parsed, client_id)
-    scope = _scope(parsed)
+    scope = _scope(parsed, client_label)
     if frame.empty:
         return Answer(f"Bu kapsamda{scope} fatura bulunamadı.", [], parsed.intent)
 
@@ -333,7 +516,7 @@ def answer(conn: sqlite3.Connection, parsed: Question,
         when = "En son" if intent is Intent.LAST else "İlk"
         return Answer(
             f"{when} fatura{scope}: {row['date'].date().isoformat()} tarihinde "
-            f"{row['vendor']} - {money(row['total_amount'])} TL "
+            f"{_vendor_name(row['vendor'])} - {money(row['total_amount'])} TL "
             f"({row['category']}, fatura no {row['invoice_no']}).",
             _rows(dated.loc[[row.name]]), intent,
         )
@@ -347,7 +530,7 @@ def answer(conn: sqlite3.Connection, parsed: Question,
         label = "En yüksek" if intent is Intent.LARGEST else "En düşük"
         return Answer(
             f"{label} fatura{scope}: {money(row['total_amount'])} TL, "
-            f"{row['date'].date().isoformat()} tarihinde {row['vendor']} "
+            f"{row['date'].date().isoformat()} tarihinde {_vendor_name(row['vendor'])} "
             f"({row['category']}, fatura no {row['invoice_no']}).",
             _rows(valued.loc[[row.name]]), intent,
         )
@@ -362,7 +545,7 @@ def answer(conn: sqlite3.Connection, parsed: Question,
     if intent is Intent.BY_VENDOR:
         grouped = stats.by_vendor(frame)
         lines = [f"Satıcıya göre{scope} (toplam {money(summary.total)} TL):"]
-        lines += [f"  {str(row['vendor'])[:40]:<42} {money(row['toplam']):>12} TL  "
+        lines += [f"  {_vendor_name(row['vendor'])[:40]:<42} {money(row['toplam']):>12} TL  "
                   f"({int(row['adet'])} fatura)" for _, row in grouped.iterrows()]
         return Answer("\n".join(lines), grouped.to_dict("records"), intent)
 
@@ -378,7 +561,7 @@ def answer(conn: sqlite3.Connection, parsed: Question,
         if grouped.empty:
             return Answer(f"Düzenli (aylık) ödeme tespit edilmedi{scope}.", [], intent)
         lines = [f"Düzenli ödemeler{scope}:"]
-        lines += [f"  {str(row['vendor'])[:40]:<42} {money(row['toplam']):>12} TL  "
+        lines += [f"  {_vendor_name(row['vendor'])[:40]:<42} {money(row['toplam']):>12} TL  "
                   f"{int(row['adet'])} fatura, ~{row['ortalama_gun']:.0f} günde bir"
                   for _, row in grouped.iterrows()]
         lines.append(f"  Aylık düzenli gider: {money(float(grouped['aylik_ortalama'].sum()))} TL")
@@ -389,7 +572,7 @@ def answer(conn: sqlite3.Connection, parsed: Question,
         lines = [f"{len(listed)} fatura{scope}, toplam {money(summary.total)} TL:"]
         lines += [
             f"  {row['date'].date().isoformat() if pd.notna(row['date']) else '-'}  "
-            f"{money(row['total_amount']):>12} TL  {str(row['vendor'])[:38]}"
+            f"{money(row['total_amount']):>12} TL  {_vendor_name(row['vendor'])[:38]}"
             for _, row in listed.iterrows()
         ]
         return Answer("\n".join(lines), _rows(listed), intent)
@@ -404,5 +587,6 @@ def route(conn: sqlite3.Connection, question: str,
         question,
         vendors=known_vendors(conn),
         categories=known_categories(conn),
+        clients=known_clients(conn),
     )
     return answer(conn, parsed, client_id)
