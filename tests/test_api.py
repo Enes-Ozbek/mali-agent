@@ -8,6 +8,7 @@ model calls for the router itself.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -431,6 +432,204 @@ def test_updating_client_metadata_round_trips(multi_client):
 def test_updating_an_unknown_client_is_404(multi_client):
     client, _, _ = multi_client
     assert client.post("/api/clients/9999", json={"display": "x"}).status_code == 404
+
+
+# --- original-file streaming: the Dosyalar view opens the actual archived PDF -------
+
+
+@pytest.fixture
+def archived_files(tmp_path, monkeypatch):
+    """One invoice, one declaration and one document, each backed by a real file on
+    disk -- the streaming endpoints read source_path straight off it, so a fixture
+    with no file behind it would not exercise the actual FileResponse path."""
+    from malimusavir import clients
+
+    db_path = tmp_path / "files.db"
+    monkeypatch.setattr(api, "DB_PATH", db_path)
+    conn = db.connect(db_path)
+    ahmet = clients.resolve(conn, "ahmet")
+
+    pdf_path = tmp_path / "fatura.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 fake invoice bytes")
+    invoice = ExtractedInvoice(
+        invoice_no="F1", date="2026-01-10", vendor="Test Ltd.", vendor_tax_id="123",
+        total_amount=100.0, tax_amount=20.0, net_amount=80.0, category="hizmet",
+        currency="TL", content_hash="h-f1", profile="test", source_path=str(pdf_path),
+    )
+    invoice.client_id = ahmet.id
+    db.upsert_invoice(conn, invoice)
+    invoice_id = conn.execute(
+        "SELECT id FROM invoices WHERE invoice_no = 'F1'").fetchone()["id"]
+
+    decl_path = tmp_path / "tahakkuk.pdf"
+    decl_path.write_bytes(b"%PDF-1.4 fake tahakkuk bytes")
+    conn.execute(
+        "INSERT INTO declarations (client_id, kind, period, doc_year, source_path, "
+        "content_hash, needs_review, ingested_at) VALUES (?, 'kdv', '2026-01', 2026, "
+        "?, 'h-d1', 0, '2026-01-01T00:00:00+00:00')",
+        (ahmet.id, str(decl_path)),
+    )
+    declaration_id = conn.execute("SELECT id FROM declarations").fetchone()["id"]
+
+    doc_path = tmp_path / "belge.pdf"
+    doc_path.write_bytes(b"%PDF-1.4 fake document bytes")
+    conn.execute(
+        "INSERT INTO documents (client_id, doc_type, doc_year, filename, source_path, "
+        "content_hash, ingested_at) VALUES (?, 'sozlesmeler', 2026, 'belge.pdf', ?, "
+        "'h-doc1', '2026-01-01T00:00:00+00:00')",
+        (ahmet.id, str(doc_path)),
+    )
+    document_id = conn.execute("SELECT id FROM documents").fetchone()["id"]
+    conn.commit()
+    conn.close()
+
+    return TestClient(api.app), invoice_id, declaration_id, document_id
+
+
+def test_invoice_file_streams_the_archived_pdf(archived_files):
+    client, invoice_id, _, _ = archived_files
+    r = client.get(f"/api/invoices/{invoice_id}/file")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/pdf"
+    assert r.content == b"%PDF-1.4 fake invoice bytes"
+
+
+def test_declaration_file_streams_the_archived_pdf(archived_files):
+    client, _, declaration_id, _ = archived_files
+    r = client.get(f"/api/declarations/{declaration_id}/file")
+    assert r.status_code == 200
+    assert r.content == b"%PDF-1.4 fake tahakkuk bytes"
+
+
+def test_document_file_streams_the_archived_pdf(archived_files):
+    client, _, _, document_id = archived_files
+    r = client.get(f"/api/documents/{document_id}/file")
+    assert r.status_code == 200
+    assert r.content == b"%PDF-1.4 fake document bytes"
+
+
+def test_unknown_invoice_file_is_404(archived_files):
+    client, _, _, _ = archived_files
+    assert client.get("/api/invoices/9999/file").status_code == 404
+
+
+def test_invoice_file_missing_from_disk_is_404_not_a_crash(archived_files, tmp_path):
+    """The DB row can outlive the file (moved archive, deleted PDF) -- that must
+    surface as a clean 404, not an unhandled FileResponse error."""
+    client, invoice_id, _, _ = archived_files
+    conn = db.connect(api.DB_PATH)
+    conn.execute("UPDATE invoices SET source_path = ? WHERE id = ?",
+                (str(tmp_path / "gone.pdf"), invoice_id))
+    conn.commit()
+    conn.close()
+    assert client.get(f"/api/invoices/{invoice_id}/file").status_code == 404
+
+
+# --- opening files in the desktop's own viewer --------------------------------------
+#
+# _launch is monkeypatched throughout: these tests must never actually spawn a PDF
+# reader or an Explorer window on the machine running them.
+
+
+@pytest.fixture
+def launches(monkeypatch):
+    """Record what would have been opened, instead of opening it."""
+    calls = []
+    monkeypatch.setattr(api, "_launch",
+                        lambda path, *, reveal: calls.append((str(path), reveal)))
+    return calls
+
+
+def test_opening_an_invoice_hands_the_archived_path_to_the_os(archived_files, launches):
+    client, invoice_id, _, _ = archived_files
+    r = client.post(f"/api/invoices/{invoice_id}/open")
+    assert r.status_code == 200
+    assert r.json()["revealed"] is False
+    assert len(launches) == 1
+    assert launches[0][0].endswith("fatura.pdf")
+    assert launches[0][1] is False
+
+
+def test_reveal_asks_the_file_manager_to_select_it(archived_files, launches):
+    client, invoice_id, _, _ = archived_files
+    r = client.post(f"/api/invoices/{invoice_id}/open?reveal=true")
+    assert r.status_code == 200
+    assert r.json()["revealed"] is True
+    assert launches[0][1] is True
+
+
+def test_declarations_and_documents_open_too(archived_files, launches):
+    client, _, declaration_id, document_id = archived_files
+    assert client.post(f"/api/declarations/{declaration_id}/open").status_code == 200
+    assert client.post(f"/api/documents/{document_id}/open").status_code == 200
+    assert [Path(p).name for p, _ in launches] == ["tahakkuk.pdf", "belge.pdf"]
+
+
+def test_opening_an_unknown_row_is_404(archived_files, launches):
+    client, _, _, _ = archived_files
+    assert client.post("/api/invoices/9999/open").status_code == 404
+    assert not launches
+
+
+def test_opening_a_file_that_left_the_disk_is_404(archived_files, launches, tmp_path):
+    client, invoice_id, _, _ = archived_files
+    conn = db.connect(api.DB_PATH)
+    conn.execute("UPDATE invoices SET source_path = ? WHERE id = ?",
+                 (str(tmp_path / "gone.pdf"), invoice_id))
+    conn.commit()
+    conn.close()
+    assert client.post(f"/api/invoices/{invoice_id}/open").status_code == 404
+    assert not launches
+
+
+def test_a_non_pdf_source_path_is_refused(archived_files, launches, tmp_path):
+    """The guard that stops this endpoint becoming a program launcher.
+
+    _launch hands the path to the shell's default handler, so opening a .bat/.exe would
+    *run* it. Nothing in the walker stores such a row today; this asserts the endpoint
+    would still refuse if one ever appeared.
+    """
+    client, invoice_id, _, _ = archived_files
+    nasty = tmp_path / "payload.bat"
+    nasty.write_text("echo pwned")
+    conn = db.connect(api.DB_PATH)
+    conn.execute("UPDATE invoices SET source_path = ? WHERE id = ?",
+                 (str(nasty), invoice_id))
+    conn.commit()
+    conn.close()
+
+    assert client.post(f"/api/invoices/{invoice_id}/open").status_code == 400
+    assert not launches, "a non-PDF must never reach the shell"
+
+
+def test_no_registered_pdf_handler_reports_cleanly(archived_files, monkeypatch):
+    """A desktop with nothing bound to .pdf raises OSError -- that is a 500 with a
+    reason, not a stack trace, because /file still works as a fallback."""
+    client, invoice_id, _, _ = archived_files
+
+    def no_handler(path, *, reveal):
+        raise OSError("no application is associated with this file")
+
+    monkeypatch.setattr(api, "_launch", no_handler)
+    r = client.post(f"/api/invoices/{invoice_id}/open")
+    assert r.status_code == 500
+    assert "açılamadı" in r.json()["detail"]
+
+
+def test_the_open_endpoint_takes_no_path_from_the_caller(archived_files, launches):
+    """Paths come from the row id only. A path-shaped query parameter must be ignored,
+    not honoured -- otherwise any page in the browser could open arbitrary files."""
+    client, invoice_id, _, _ = archived_files
+    client.post(f"/api/invoices/{invoice_id}/open?path=C:/Windows/System32/calc.exe")
+    assert launches[0][0].endswith("fatura.pdf")
+
+
+def test_streamed_files_are_shown_inline_not_downloaded(archived_files):
+    """A local app should not litter ~/Downloads with copies of files already on disk."""
+    client, invoice_id, _, _ = archived_files
+    r = client.get(f"/api/invoices/{invoice_id}/file")
+    assert "inline" in r.headers["content-disposition"]
+    assert "attachment" not in r.headers["content-disposition"]
 
 
 # --- static mount -------------------------------------------------------------------

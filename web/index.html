@@ -132,6 +132,14 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 
 <div class="scroll" style="display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--color-divider);overflow:auto">
 
+<div style="padding:9px 14px 0;flex:none">
+<span style="display:inline-flex;gap:2px;border:1px solid var(--color-divider);border-radius:4px;padding:1px">
+<button class="mode" style="font-size:10.5px;color:{{ genelColor }};box-shadow:{{ genelShadow }}" onClick="{{ setTabGenel }}">Genel Bakış</button>
+<button class="mode" style="font-size:10.5px;color:{{ dosyalarColor }};box-shadow:{{ dosyalarShadow }}" onClick="{{ setTabDosyalar }}">Dosyalar</button>
+</span>
+</div>
+
+<sc-if value="{{ isGenel }}" hint-placeholder-val="{{ true }}">
 <div style="padding:10px 14px;border-bottom:1px solid var(--color-divider);flex:none">
 <div style="display:flex;align-items:baseline;gap:9px">
 <h4 style="margin:0">Tahakkuklar</h4>
@@ -177,6 +185,54 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 </div>
 </sc-for>
 <div style="padding:8px 14px;font-size:10.5px;opacity:.55">{{ ledgerNote }}</div>
+</sc-if>
+
+<sc-if value="{{ isDosyalar }}" hint-placeholder-val="{{ false }}">
+<div style="padding:10px 14px;border-bottom:1px solid var(--color-divider);flex:none">
+<div style="display:flex;align-items:baseline;gap:9px">
+<h4 style="margin:0">Dosyalar</h4>
+<span class="num" style="font-size:10.5px;opacity:.55">{{ filesBreadcrumb }}</span>
+</div>
+</div>
+
+<sc-if value="{{ needsYearForFiles }}" hint-placeholder-val="{{ false }}">
+<div style="padding:16px 14px;font-size:12px;opacity:.6">Dosyalara göz atmak için soldan bir yıl seçin.</div>
+</sc-if>
+
+<sc-if value="{{ showFolderGrid }}" hint-placeholder-val="{{ false }}">
+<div style="display:flex;flex-wrap:wrap;gap:9px;padding:14px">
+<sc-for list="{{ folders }}" as="f" hint-placeholder-count="3">
+<div class="crow" style="width:118px;padding:13px 10px;border:1px solid var(--color-divider);border-radius:5px;text-align:center" onClick="{{ f.open }}">
+<div style="font-size:12.5px;font-weight:600">{{ f.label }}</div>
+<div class="num" style="font-size:10px;opacity:.55;margin-top:4px">{{ f.count }} dosya</div>
+</div>
+</sc-for>
+<sc-if value="{{ noFolders }}" hint-placeholder-val="{{ false }}">
+<div style="padding:6px 4px;font-size:11.5px;opacity:.55">Bu yılda dosya yok.</div>
+</sc-if>
+</div>
+</sc-if>
+
+<sc-if value="{{ showFileList }}" hint-placeholder-val="{{ false }}">
+<div style="padding:6px 14px 2px">
+<button class="link" style="font-size:11px" onClick="{{ backToFolders }}">← Klasörler</button>
+</div>
+<sc-for list="{{ fileRows }}" as="fl" hint-placeholder-count="4">
+<div class="krow crow" style="display:flex;align-items:center;gap:10px;padding:7px 14px;border-bottom:1px solid var(--color-divider);font-size:11.5px" onClick="{{ fl.open }}" title="{{ fl.path }}">
+<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ fl.label }}</span>
+<span class="num" style="opacity:.6">{{ fl.meta }}</span>
+<sc-if value="{{ fl.hasStatus }}" hint-placeholder-val="{{ false }}">
+<span class="{{ fl.tagClass }}">{{ fl.status }}</span>
+</sc-if>
+<button class="link" style="font-size:10px;opacity:.6;flex:none" onClick="{{ fl.reveal }}" title="Klasörde göster">Klasör</button>
+</div>
+</sc-for>
+<div style="padding:8px 14px;font-size:10.5px;opacity:.55">{{ fileListNote }}</div>
+<sc-if value="{{ hasFileStatus }}" hint-placeholder-val="{{ false }}">
+<div style="margin:0 14px 10px;padding:6px 9px;border-left:2px solid var(--color-accent);background:var(--color-surface);font-size:10.5px;line-height:1.45">{{ fileStatus }}</div>
+</sc-if>
+</sc-if>
+</sc-if>
 </div>
 
 <div style="display:flex;flex-direction:column;min-height:0;background:var(--color-surface)">
@@ -233,10 +289,14 @@ class Component extends DCLogic {
     view: 'list', clientId: null, client: null, year: null,
     loading: true, search: '',
     clients: [], sum: null, cats: [], months: [], recurring: [], ledger: [],
-    tahakkuklar: [],
+    tahakkuklar: [], docs: [],
+    tab: 'genel', folder: null, fileStatus: '',
     draft: '', asking: false, hover: null, useLlm: true,
     chat: []
   };
+
+  MONTHS = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran',
+            'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
 
   CATS = {
     telekom: 'var(--color-accent-600)', enerji: 'var(--color-accent-300)',
@@ -287,6 +347,7 @@ class Component extends DCLogic {
   async openClient(client) {
     this.setState({
       view: 'client', clientId: client.id, client, year: null,
+      tab: 'genel', folder: null,
       loading: true, chat: [{ who: 'Yardımcı', text: client.label + ' için kayıtlar yüklendi. Bu müşteriye dair soru sorabilirsiniz.' }]
     });
     await this.loadClientData();
@@ -301,13 +362,15 @@ class Component extends DCLogic {
         fetch(this.scoped('/api/recurring')).then(r => r.json()),
         fetch(this.scoped('/api/invoices?limit=300')).then(r => r.json())
       ]);
-      let tahakkuklar = [];
+      let tahakkuklar = [], docs = [];
       if (this.state.clientId !== null && this.state.clientId >= 0) {
         const y = this.state.year ? `?year=${this.state.year}` : '';
-        tahakkuklar = await fetch(`/api/clients/${this.state.clientId}/declarations${y}`)
-          .then(r => r.json()).catch(() => []);
+        [tahakkuklar, docs] = await Promise.all([
+          fetch(`/api/clients/${this.state.clientId}/declarations${y}`).then(r => r.json()).catch(() => []),
+          fetch(`/api/clients/${this.state.clientId}/documents${y}`).then(r => r.json()).catch(() => [])
+        ]);
       }
-      this.setState({ loading: false, sum, cats, months, recurring, ledger, tahakkuklar });
+      this.setState({ loading: false, sum, cats, months, recurring, ledger, tahakkuklar, docs });
     } catch (e) {
       this.setState({ loading: false });
     }
@@ -315,7 +378,34 @@ class Component extends DCLogic {
 
   back = () => this.setState({ view: 'list', clientId: null, client: null, year: null, chat: [] });
   onSearch = (e) => this.setState({ search: e.target.value });
-  pickYear = (year) => async () => { this.setState({ year }); await this.loadClientData(); };
+  pickYear = (year) => async () => { this.setState({ year, folder: null }); await this.loadClientData(); };
+
+  setTabGenel = () => this.setState({ tab: 'genel', fileStatus: '' });
+  setTabDosyalar = () => this.setState({ tab: 'dosyalar', folder: null, fileStatus: '' });
+  openFolder = (folder) => () => this.setState({ folder, fileStatus: '' });
+  backToFolders = () => this.setState({ folder: null, fileStatus: '' });
+
+  // The documents already live on this machine, so the app asks the OS to open them in
+  // the user's own PDF viewer rather than streaming a second copy into ~/Downloads.
+  // `reveal` selects the file in Explorer instead, for when the surrounding folder is
+  // what the accountant actually wants to see.
+  openFile = (kind, id, reveal) => async (e) => {
+    if (e && e.stopPropagation) e.stopPropagation();
+    this.setState({ fileStatus: reveal ? 'Klasör açılıyor…' : 'Dosya açılıyor…' });
+    try {
+      const res = await fetch(`/api/${kind}/${id}/open${reveal ? '?reveal=true' : ''}`,
+                              { method: 'POST' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        this.setState({ fileStatus: err.detail || 'Dosya açılamadı.' });
+        return;
+      }
+      const data = await res.json();
+      this.setState({ fileStatus: (reveal ? 'Klasörde gösterildi: ' : 'Açıldı: ') + data.opened });
+    } catch (err) {
+      this.setState({ fileStatus: 'Sunucuya bağlanılamadı: ' + err.message });
+    }
+  };
 
   say(who, text, extra) {
     this.setState(s => ({ chat: [...s.chat, { who, text, ...(extra || {}) }] }));
@@ -427,6 +517,82 @@ class Component extends DCLogic {
       tagClass: t.needs_review ? 'tag tag-outline' : 'tag tag-neutral'
     }));
 
+    // ---- Dosyalar: files grouped into month folders --------------------------------
+    // st.ledger/tahakkuklar are already year-scoped server-side (scoped() carries
+    // st.year), so grouping them here by the month of their own date/period is enough
+    // to reconstruct the archive's folder view without a dedicated endpoint.
+    const monthGroups = {};
+    if (st.year) {
+      st.ledger.forEach(i => {
+        if (!i.date) return;
+        const m = i.date.slice(5, 7);
+        (monthGroups[m] || (monthGroups[m] = { invoices: [], decls: [] })).invoices.push(i);
+      });
+      st.tahakkuklar.forEach(t => {
+        if (!t.period) return;
+        const m = t.period.slice(5, 7);
+        (monthGroups[m] || (monthGroups[m] = { invoices: [], decls: [] })).decls.push(t);
+      });
+    }
+    const monthKeys = Object.keys(monthGroups).sort();
+    const folders = monthKeys.map(m => ({
+      label: this.MONTHS[parseInt(m, 10) - 1] || m,
+      count: monthGroups[m].invoices.length + monthGroups[m].decls.length,
+      open: this.openFolder({ type: 'month', month: m })
+    }));
+    if (st.docs.length) {
+      folders.push({
+        label: 'Belgeler', count: st.docs.length,
+        open: this.openFolder({ type: 'documents' })
+      });
+    }
+
+    let fileRows = [], fileListNote = '';
+    if (st.folder && st.folder.type === 'month') {
+      const g = monthGroups[st.folder.month] || { invoices: [], decls: [] };
+      fileRows = [
+        ...g.invoices.map(i => ({
+          open: this.openFile('invoices', i.id, false),
+          reveal: this.openFile('invoices', i.id, true),
+          path: i.source_path || '',
+          label: this.shortVendor(i.vendor) || 'Fatura',
+          meta: this.fmt(i.total_amount).replace(' TL', ''),
+          status: i.needs_review ? 'İncele' : 'Tamam', hasStatus: true,
+          tagClass: i.needs_review ? 'tag tag-outline' : 'tag tag-neutral'
+        })),
+        ...g.decls.map(t => ({
+          open: this.openFile('declarations', t.id, false),
+          reveal: this.openFile('declarations', t.id, true),
+          path: t.source_path || '',
+          label: (this.KIND[t.kind] || t.kind || 'Tahakkuk') + ' Fişi',
+          meta: t.needs_review ? '—' : this.fmt(t.payable).replace(' TL', ''),
+          status: t.needs_review ? 'İncele' : 'Tamam', hasStatus: true,
+          tagClass: t.needs_review ? 'tag tag-outline' : 'tag tag-neutral'
+        }))
+      ];
+      fileListNote = `${fileRows.length} dosya · ${this.MONTHS[parseInt(st.folder.month, 10) - 1]}`;
+    } else if (st.folder && st.folder.type === 'documents') {
+      fileRows = st.docs.map(d => ({
+        open: this.openFile('documents', d.id, false),
+        reveal: this.openFile('documents', d.id, true),
+        path: d.source_path || '',
+        label: d.filename, meta: d.doc_type,
+        status: '', hasStatus: false, tagClass: 'tag tag-neutral'
+      }));
+      fileListNote = `${fileRows.length} belge`;
+    }
+
+    const isDosyalar = st.tab === 'dosyalar';
+    let filesBreadcrumb = (st.client && st.client.label) || '';
+    if (st.year) {
+      filesBreadcrumb += ' / ' + st.year;
+      if (st.folder && st.folder.type === 'month') {
+        filesBreadcrumb += ' / ' + this.MONTHS[parseInt(st.folder.month, 10) - 1];
+      } else if (st.folder && st.folder.type === 'documents') {
+        filesBreadcrumb += ' / Belgeler';
+      }
+    }
+
     const clientYears = (st.client && st.client.years) || [];
     const years = [{ label: 'Tümü', value: null }]
       .concat(clientYears.map(y => ({ label: String(y), value: y })))
@@ -482,6 +648,20 @@ class Component extends DCLogic {
       tahakkukNote: tahakkuklar.length
         ? `${tahakkuklar.length} kayıt`
         : 'bu dönemde tahakkuk fişi yok',
+
+      isGenel: !isDosyalar, isDosyalar,
+      setTabGenel: this.setTabGenel, setTabDosyalar: this.setTabDosyalar,
+      genelColor: isDosyalar ? 'inherit' : acc,
+      genelShadow: isDosyalar ? 'none' : 'inset 0 0 0 1px ' + acc,
+      dosyalarColor: isDosyalar ? acc : 'inherit',
+      dosyalarShadow: isDosyalar ? 'inset 0 0 0 1px ' + acc : 'none',
+      filesBreadcrumb,
+      needsYearForFiles: isDosyalar && !st.year,
+      showFolderGrid: isDosyalar && !!st.year && !st.folder,
+      showFileList: isDosyalar && !!st.year && !!st.folder,
+      folders, noFolders: folders.length === 0,
+      fileRows, fileListNote, backToFolders: this.backToFolders,
+      fileStatus: st.fileStatus, hasFileStatus: !!st.fileStatus,
       recTotalStr: this.fmt(st.recurring.reduce((s, r) => s + (r.aylik_ortalama || 0), 0)).replace(' TL', ''),
       ledgerNote: st.loading ? 'Yükleniyor…' : `${ledger.length} fatura gösteriliyor.`,
       hoverReadout: st.hover || 'bir aya gelin',

@@ -11,6 +11,9 @@ the bottom of this file, or the mount shadows them.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from sqlite3 import Connection
@@ -18,6 +21,7 @@ from sqlite3 import Connection
 import numpy as np
 import pandas as pd
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -215,6 +219,9 @@ class DeclarationRow(BaseModel):
     lines: list[DeclarationLine] = []
     doc_year: int
     filename: str
+    #: Where the PDF actually sits. Shown as the row tooltip -- for an app whose job is
+    #: finding a client's paperwork, "which folder is this in" is half the answer.
+    source_path: str | None = None
     needs_review: bool
     review_reasons: list[str] = []
 
@@ -224,6 +231,7 @@ class DocumentRow(BaseModel):
     doc_type: str
     doc_year: int
     filename: str
+    source_path: str | None = None
 
 
 class ChatMessage(BaseModel):
@@ -463,6 +471,7 @@ def get_declarations(client_id: int, year: int | None = None,
             "lines": json.loads(record["lines"] or "[]"),
             "doc_year": record["doc_year"],
             "filename": Path(record["source_path"]).name,
+            "source_path": record["source_path"],
             "needs_review": bool(record["needs_review"]),
             "review_reasons": json.loads(record["review_reasons"] or "[]"),
         })
@@ -472,13 +481,147 @@ def get_declarations(client_id: int, year: int | None = None,
 @app.get("/api/clients/{client_id}/documents", response_model=list[DocumentRow])
 def get_documents(client_id: int, year: int | None = None,
                   conn: Connection = Depends(get_conn)):
-    sql = "SELECT id, doc_type, doc_year, filename FROM documents WHERE client_id = ?"
+    sql = ("SELECT id, doc_type, doc_year, filename, source_path "
+           "FROM documents WHERE client_id = ?")
     params: list = [client_id]
     if year is not None:
         sql += " AND doc_year = ?"
         params.append(year)
     return [dict(r) for r in conn.execute(sql + " ORDER BY doc_year DESC, doc_type, filename",
                                           params)]
+
+
+# ---- original files ----------------------------------------------------------------
+#
+# The Dosyalar (files) view in the client workspace lets an operator reach the actual PDF
+# behind a ledger row or declaration -- the archive folder is the source of truth, so the
+# UI should be able to show it, not just the fields extracted from it.
+#
+# Two ways to reach a file, for two different situations:
+#
+#   /open  -- hands the path to the OS so the PDF opens in the user's own viewer, or
+#             shows it selected in the file manager. This is the one the UI uses. The
+#             app is local and the documents are already sitting on this machine, so
+#             re-downloading a copy into the browser's Downloads folder would just
+#             litter the disk with duplicates of files the user already has.
+#   /file  -- streams the bytes over HTTP. Kept as a fallback for viewing inside the
+#             browser, and it is what makes the file reachable at all if the desktop
+#             has no PDF handler registered.
+#
+# Neither route ever accepts a filesystem path from the caller: the path is looked up
+# from the row id, so the only files reachable are ones the ingest walker already put in
+# the database.
+
+
+class OpenResult(BaseModel):
+    opened: str
+    revealed: bool = False
+
+
+def _resolve_pdf(source_path: str | None) -> Path:
+    if not source_path:
+        raise HTTPException(404, "dosya bulunamadı")
+    path = Path(source_path)
+    if not path.is_file():
+        # The row can outlive the file: the archive gets moved, or a PDF is deleted
+        # after ingest. Say so plainly rather than failing deeper in the OS call.
+        raise HTTPException(404, f"dosya diskte bulunamadı: {path}")
+    if path.suffix.lower() != ".pdf":
+        # _launch hands this path to the shell's default handler, so a non-PDF would be
+        # *executed* by whatever program claims its extension. The walker only ever
+        # ingests PDFs, which makes this unreachable today -- it stays because the cost
+        # of being wrong here is arbitrary code execution, and the check is one line.
+        raise HTTPException(400, "yalnızca PDF dosyaları açılabilir")
+    return path
+
+
+def _launch(path: Path, *, reveal: bool) -> None:
+    """Open a PDF in the desktop's own viewer, or select it in the file manager."""
+    if reveal:
+        if sys.platform == "win32":
+            # explorer parses its own command line and wants /select,<path> as a single
+            # token, so the usual list form does not work here. It also exits 1 even on
+            # success, hence check=False.
+            subprocess.run(f'explorer /select,"{path}"', check=False)
+        elif sys.platform == "darwin":
+            subprocess.run(["open", "-R", str(path)], check=False)
+        else:
+            subprocess.run(["xdg-open", str(path.parent)], check=False)
+        return
+
+    if sys.platform == "win32":
+        os.startfile(str(path))  # noqa: S606 - path is DB-sourced and .pdf-checked
+    elif sys.platform == "darwin":
+        subprocess.run(["open", str(path)], check=False)
+    else:
+        subprocess.run(["xdg-open", str(path)], check=False)
+
+
+def _open_row(conn: Connection, table: str, row_id: int, reveal: bool) -> OpenResult:
+    row = conn.execute(
+        f"SELECT source_path FROM {table} WHERE id = ?", (row_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, f"{table[:-1]} {row_id} not found")
+    path = _resolve_pdf(row["source_path"])
+    try:
+        _launch(path, reveal=reveal)
+    except OSError as exc:
+        # No registered handler for .pdf, or the shell refused. The browser fallback
+        # (/file) still works, so this must not read as "the file is gone".
+        raise HTTPException(500, f"dosya açılamadı: {exc}") from exc
+    return OpenResult(opened=str(path), revealed=reveal)
+
+
+@app.post("/api/invoices/{invoice_id}/open", response_model=OpenResult)
+def open_invoice(invoice_id: int, reveal: bool = False,
+                 conn: Connection = Depends(get_conn)):
+    return _open_row(conn, "invoices", invoice_id, reveal)
+
+
+@app.post("/api/declarations/{declaration_id}/open", response_model=OpenResult)
+def open_declaration(declaration_id: int, reveal: bool = False,
+                     conn: Connection = Depends(get_conn)):
+    return _open_row(conn, "declarations", declaration_id, reveal)
+
+
+@app.post("/api/documents/{document_id}/open", response_model=OpenResult)
+def open_document(document_id: int, reveal: bool = False,
+                  conn: Connection = Depends(get_conn)):
+    return _open_row(conn, "documents", document_id, reveal)
+
+
+def _stream_pdf(source_path: str | None) -> FileResponse:
+    path = _resolve_pdf(source_path)
+    # inline, not attachment: the point is to view it, not to save a second copy.
+    return FileResponse(path, media_type="application/pdf",
+                        headers={"Content-Disposition": f'inline; filename="{path.name}"'})
+
+
+@app.get("/api/invoices/{invoice_id}/file")
+def get_invoice_file(invoice_id: int, conn: Connection = Depends(get_conn)):
+    row = conn.execute(
+        "SELECT source_path FROM invoices WHERE id = ?", (invoice_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, f"invoice {invoice_id} not found")
+    return _stream_pdf(row["source_path"])
+
+
+@app.get("/api/declarations/{declaration_id}/file")
+def get_declaration_file(declaration_id: int, conn: Connection = Depends(get_conn)):
+    row = conn.execute(
+        "SELECT source_path FROM declarations WHERE id = ?", (declaration_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, f"declaration {declaration_id} not found")
+    return _stream_pdf(row["source_path"])
+
+
+@app.get("/api/documents/{document_id}/file")
+def get_document_file(document_id: int, conn: Connection = Depends(get_conn)):
+    row = conn.execute(
+        "SELECT source_path FROM documents WHERE id = ?", (document_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, f"document {document_id} not found")
+    return _stream_pdf(row["source_path"])
 
 
 # ---- ask ------------------------------------------------------------------------

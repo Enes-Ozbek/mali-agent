@@ -35,6 +35,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 _FONT_NAME = "TRFont"
 pdfmetrics.registerFont(TTFont(_FONT_NAME, r"C:\Windows\Fonts\arial.ttf"))
 
+MONTHS_TR = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
+             "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
+
 MOCK_DATA = {
     "agency_clients": [
         {
@@ -68,9 +71,46 @@ MOCK_DATA = {
                                 "status": "Ödendi",
                             }
                         ],
-                    }
+                    },
+                    "Şubat": {
+                        "invoices": [
+                            {
+                                "invoice_number": "EAR2026000146011",
+                                "issue_date": "2026-02-11T10:05:00Z",
+                                "direction": "SATIŞ",
+                                "counterparty": {"title": "Bireysel Müşteri", "vkn_tckn": "22222222222"},
+                                "subtotal": 1800.00, "kdv_total": 360.00, "grand_total": 2160.00,
+                                "kdv_rate": 20,
+                            }
+                        ],
+                        "beyannameler": [
+                            {
+                                "type": "KDV1",
+                                "filing_date": "2026-03-24T10:00:00Z",
+                                "accrual_receipt_no": "2026032401L520003002",
+                                "amount_due": 360.00,
+                                "status": "Ödendi",
+                            }
+                        ],
+                    },
+                    "Mart": {
+                        "invoices": [
+                            {
+                                "invoice_number": "EAR2026000147233",
+                                "issue_date": "2026-03-08T13:40:00Z",
+                                "direction": "SATIŞ",
+                                "counterparty": {"title": "Bireysel Müşteri", "vkn_tckn": "33333333333"},
+                                "subtotal": 3200.00, "kdv_total": 640.00, "grand_total": 3840.00,
+                                "kdv_rate": 20,
+                            }
+                        ],
+                    },
                 }
             },
+            "documents": [
+                {"filename": "Vergi Levhası.pdf", "doc_type": "belgeler"},
+                {"filename": "İşyeri Açma Ruhsatı.pdf", "doc_type": "belgeler"},
+            ],
         },
         {
             "client_id": "CUST-1004",
@@ -103,9 +143,46 @@ MOCK_DATA = {
                                 "status": "Devreden KDV",
                             }
                         ],
-                    }
+                    },
+                    "Şubat": {
+                        "invoices": [
+                            {
+                                "invoice_number": "GIB2026000001355",
+                                "issue_date": "2026-02-05T09:10:00Z",
+                                "direction": "ALIŞ",
+                                "counterparty": {"title": "Demir Çelik İnşaat Malzemeleri", "vkn_tckn": "4443332221"},
+                                "subtotal": 65000.00, "kdv_total": 13000.00, "grand_total": 78000.00,
+                                "kdv_rate": 20,
+                            }
+                        ],
+                    },
+                    "Nisan": {
+                        "invoices": [
+                            {
+                                "invoice_number": "GIB2026000002980",
+                                "issue_date": "2026-04-18T11:00:00Z",
+                                "direction": "ALIŞ",
+                                "counterparty": {"title": "Vinç ve İş Makinaları Kiralama", "vkn_tckn": "5554443332"},
+                                "subtotal": 30000.00, "kdv_total": 6000.00, "grand_total": 36000.00,
+                                "kdv_rate": 20,
+                            }
+                        ],
+                        "beyannameler": [
+                            {
+                                "type": "KDV1",
+                                "filing_date": "2026-05-24T16:00:00Z",
+                                "accrual_receipt_no": "2026052401L520004002",
+                                "amount_due": 6000.00,
+                                "status": "Tahakkuk Kesildi",
+                            }
+                        ],
+                    },
                 }
             },
+            "documents": [
+                {"filename": "İş Yeri Kira Sözleşmesi.pdf", "doc_type": "belgeler"},
+                {"filename": "İmza Sirküleri.pdf", "doc_type": "belgeler"},
+            ],
         },
         {
             "client_id": "CUST-1005",
@@ -138,9 +215,24 @@ MOCK_DATA = {
                                 "status": "Tahakkuk Kesildi",
                             }
                         ],
-                    }
+                    },
+                    "Mart": {
+                        "invoices": [
+                            {
+                                "invoice_number": "FKB2026000000188",
+                                "issue_date": "2026-03-14T10:20:00Z",
+                                "direction": "SATIŞ",
+                                "counterparty": {"title": "Yerel Zincir Market", "vkn_tckn": "8889990001"},
+                                "subtotal": 4200.00, "kdv_total": 42.00, "grand_total": 4242.00,
+                                "kdv_rate": 1,
+                            }
+                        ],
+                    },
                 }
             },
+            "documents": [
+                {"filename": "Gıda Üretim İzin Belgesi.pdf", "doc_type": "belgeler"},
+            ],
         },
         {
             "client_id": "CUST-1006",
@@ -153,6 +245,27 @@ MOCK_DATA = {
             "status": "Active",
             "financial_records": {
                 "2026": {
+                    "Ocak": {
+                        "invoices": [
+                            {
+                                "invoice_number": "GIB2026000455887",
+                                "issue_date": "2026-01-22T07:50:00Z",
+                                "direction": "ALIŞ",
+                                "counterparty": {"title": "Lastik ve Bakım Servisi Ltd. Şti.", "vkn_tckn": "7776665552"},
+                                "subtotal": 18000.00, "kdv_total": 3600.00, "grand_total": 21600.00,
+                                "kdv_rate": 20,
+                            }
+                        ],
+                        "beyannameler": [
+                            {
+                                "type": "MUHSGK",
+                                "filing_date": "2026-02-26T13:00:00Z",
+                                "accrual_receipt_no": "2026022601L520006001",
+                                "amount_due": 9800.50,
+                                "status": "Ödendi",
+                            }
+                        ],
+                    },
                     "Şubat": {
                         "invoices": [
                             {
@@ -168,14 +281,18 @@ MOCK_DATA = {
                             {
                                 "type": "MUHSGK",
                                 "filing_date": "2026-03-26T13:30:00Z",
-                                "accrual_receipt_no": "2026032601L520006001",
+                                "accrual_receipt_no": "2026032601L520006002",
                                 "amount_due": 12450.75,
                                 "status": "Ödendi",
                             }
                         ],
-                    }
+                    },
                 }
             },
+            "documents": [
+                {"filename": "Taşıma Yetki Belgesi (K1).pdf", "doc_type": "belgeler"},
+                {"filename": "Filo Sigorta Poliçesi.pdf", "doc_type": "belgeler"},
+            ],
         },
         {
             "client_id": "CUST-1007",
@@ -208,9 +325,46 @@ MOCK_DATA = {
                                 "status": "Tahakkuk Kesildi",
                             }
                         ],
-                    }
+                    },
+                    "Şubat": {
+                        "invoices": [
+                            {
+                                "invoice_number": "EAR2026000000091",
+                                "issue_date": "2026-02-20T16:10:00Z",
+                                "direction": "SATIŞ",
+                                "counterparty": {"title": "Kuzey Yıldızı Perakende A.Ş.", "vkn_tckn": "2342342345"},
+                                "subtotal": 30000.00, "kdv_total": 6000.00, "grand_total": 36000.00,
+                                "kdv_rate": 20,
+                            }
+                        ],
+                        "beyannameler": [
+                            {
+                                "type": "KDV1",
+                                "filing_date": "2026-03-24T15:00:00Z",
+                                "accrual_receipt_no": "2026032401L520007002",
+                                "amount_due": 6000.00,
+                                "status": "Tahakkuk Kesildi",
+                            }
+                        ],
+                    },
+                    "Mart": {
+                        "invoices": [
+                            {
+                                "invoice_number": "EAR2026000000122",
+                                "issue_date": "2026-03-25T09:30:00Z",
+                                "direction": "SATIŞ",
+                                "counterparty": {"title": "Global Reklam Ajansı", "vkn_tckn": "1231231234"},
+                                "subtotal": 20000.00, "kdv_total": 4000.00, "grand_total": 24000.00,
+                                "kdv_rate": 20,
+                            }
+                        ],
+                    },
                 }
             },
+            "documents": [
+                {"filename": "Yazılım Lisans Sözleşmesi.pdf", "doc_type": "belgeler"},
+                {"filename": "Serbest Meslek Makbuzu Yetki Belgesi.pdf", "doc_type": "belgeler"},
+            ],
         },
     ]
 }
@@ -290,13 +444,19 @@ def _invoice_pdf(path: Path, *, client, invoice: dict) -> None:
     _draw(path, lines)
 
 
-def _tahakkuk_pdf(path: Path, *, client, declaration: dict, year: int) -> None:
+def _tahakkuk_pdf(path: Path, *, client, declaration: dict, period_year: int,
+                   period_month: int) -> None:
+    """`period_year`/`period_month` is the tax period being declared -- e.g. January's
+    KDV -- which is NOT the same month as `filing_date` (KDV is filed by the 24th-26th
+    of the *following* month). Stamping the receipt with the filing month instead of the
+    period would file a January declaration under February in the archive."""
     code = _DECL_CODE.get(declaration["type"], "0000")
     label = "MUHTASAR VE PRİM HİZMET BEYANNAMESİ" if declaration["type"] == "MUHSGK" else \
         "GERÇEK USULDE KATMA DEĞER VERGİSİ"
     filing = declaration["filing_date"].split("T")[0]
     f_year, f_month, _ = filing.split("-")
-    period = f"{f_month}/{f_year}-{f_month}/{f_year}"
+    p_month = f"{period_month:02d}"
+    period = f"{p_month}/{period_year}-{p_month}/{period_year}"
     due = f"28/{f_month}/{f_year}"
     amount = declaration["amount_due"]
     digits = "".join(ch for ch in client["tax_number"] if ch.isdigit())
@@ -325,18 +485,42 @@ def _tahakkuk_pdf(path: Path, *, client, declaration: dict, year: int) -> None:
     _draw(path, lines)
 
 
+def _document_pdf(path: Path, *, client, filename: str) -> None:
+    """A generic archived document -- unlike invoices and declarations, its content is
+    never parsed (archive.py stores it as-is), so the text only needs to be plausible."""
+    lines = [
+        filename.rsplit(".", 1)[0].upper(),
+        "",
+        client["commercial_title"],
+        f"Vergi No: {client['tax_number']}",
+        f"{client['tax_office']}",
+        "",
+        "Bu belge örnek/mock veridir.",
+    ]
+    _draw(path, lines)
+
+
 def build_archive(root: Path) -> None:
     for client in MOCK_DATA["agency_clients"]:
         folder = _safe_folder(client["owner_name"] or client["commercial_title"])
         for year_str, months in client["financial_records"].items():
             year = int(year_str)
-            for _month, records in months.items():
-                for i, invoice in enumerate(records.get("invoices", [])):
+            for month_name, records in months.items():
+                month_num = MONTHS_TR.index(month_name) + 1
+                for invoice in records.get("invoices", []):
                     dest = root / folder / year_str / "faturalar" / f"{invoice['invoice_number']}.pdf"
                     _invoice_pdf(dest, client=client, invoice=invoice)
-                for i, decl in enumerate(records.get("beyannameler", [])):
+                for decl in records.get("beyannameler", []):
                     dest = root / folder / year_str / "tahakkuk" / f"{decl['accrual_receipt_no']}.pdf"
-                    _tahakkuk_pdf(dest, client=client, declaration=decl, year=year)
+                    _tahakkuk_pdf(dest, client=client, declaration=decl,
+                                  period_year=year, period_month=month_num)
+
+            # Misc documents have no month of their own in the mock data -- they're
+            # filed once per year, same as a real "belgeler" folder holding licences
+            # and contracts rather than dated transactions.
+            for doc in client.get("documents", []):
+                dest = root / folder / year_str / doc["doc_type"] / doc["filename"]
+                _document_pdf(dest, client=client, filename=doc["filename"])
 
 
 def main() -> None:
