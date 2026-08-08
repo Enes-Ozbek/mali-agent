@@ -505,19 +505,22 @@ def build_archive(root: Path) -> None:
         folder = _safe_folder(client["owner_name"] or client["commercial_title"])
         for year_str, months in client["financial_records"].items():
             year = int(year_str)
+            # <client>/<year>/<month>/<doc type>/ -- the layout the practice actually
+            # uses, so the UI tree can mirror the disk instead of guessing months from
+            # document dates.
             for month_name, records in months.items():
                 month_num = MONTHS_TR.index(month_name) + 1
+                month_dir = root / folder / year_str / f"{month_num:02d}-{month_name}"
                 for invoice in records.get("invoices", []):
-                    dest = root / folder / year_str / "faturalar" / f"{invoice['invoice_number']}.pdf"
+                    dest = month_dir / "faturalar" / f"{invoice['invoice_number']}.pdf"
                     _invoice_pdf(dest, client=client, invoice=invoice)
                 for decl in records.get("beyannameler", []):
-                    dest = root / folder / year_str / "tahakkuk" / f"{decl['accrual_receipt_no']}.pdf"
+                    dest = month_dir / "tahakkuk" / f"{decl['accrual_receipt_no']}.pdf"
                     _tahakkuk_pdf(dest, client=client, declaration=decl,
                                   period_year=year, period_month=month_num)
 
-            # Misc documents have no month of their own in the mock data -- they're
-            # filed once per year, same as a real "belgeler" folder holding licences
-            # and contracts rather than dated transactions.
+            # Licences and contracts belong to the year, not to a month, so they stay
+            # directly under it. Exercises the mixed layout the walker has to support.
             for doc in client.get("documents", []):
                 dest = root / folder / year_str / doc["doc_type"] / doc["filename"]
                 _document_pdf(dest, client=client, filename=doc["filename"])

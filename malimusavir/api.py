@@ -150,6 +150,51 @@ class InvoiceOut(BaseModel):
     review_reasons: list[str]
     extraction_profile: str | None
     source_path: str | None
+    doc_year: int | None = None
+    doc_month: int | None = None
+    file_exists: bool = False
+
+
+class VatSummaryOut(BaseModel):
+    """The KDV position for the selected period, from invoices."""
+
+    income: float
+    expense: float
+    output_vat: float
+    input_vat: float
+    vat_balance: float
+    payable: float
+    carried_forward: float
+    sales_count: int
+    purchase_count: int
+    #: Set when nothing is marked as a sale. The UI must warn rather than present
+    #: "0,00 TL gelir" as a fact -- it usually means the client's tax_id is missing,
+    #: which makes direction_for() classify every invoice as a purchase.
+    no_sales_recorded: bool
+    #: What the tax office actually assessed for the same period, from tahakkuk fişi.
+    #: Independent of everything above; the two disagreeing is the finding, so they are
+    #: reported side by side rather than reconciled into one number.
+    assessed_vat: float | None = None
+    assessed_receipts: int = 0
+
+
+class TreeCategory(BaseModel):
+    doc_type: str          #: the folder name, verbatim
+    kind: str              #: invoice | declaration | document
+    count: int
+
+
+class TreeMonth(BaseModel):
+    month: int | None      #: None means filed directly under the year
+    label: str
+    count: int
+    categories: list[TreeCategory]
+
+
+class TreeYear(BaseModel):
+    year: int
+    count: int
+    months: list[TreeMonth]
 
 
 class AskRequest(BaseModel):
@@ -218,7 +263,12 @@ class DeclarationRow(BaseModel):
     taxpayer_tax_id: str | None = None
     lines: list[DeclarationLine] = []
     doc_year: int
+    doc_month: int | None = None
     filename: str
+    #: Whether source_path still resolves to a real file. The archive is the source of
+    #: truth and can move underneath the database, so the UI shows this per row rather
+    #: than only discovering it when someone clicks.
+    file_exists: bool = False
     #: Where the PDF actually sits. Shown as the row tooltip -- for an app whose job is
     #: finding a client's paperwork, "which folder is this in" is half the answer.
     source_path: str | None = None
@@ -230,7 +280,9 @@ class DocumentRow(BaseModel):
     id: int
     doc_type: str
     doc_year: int
+    doc_month: int | None = None
     filename: str
+    file_exists: bool = False
     source_path: str | None = None
 
 
@@ -305,16 +357,17 @@ def _scope_id(client_id: int | str | None) -> int | str | None:
 
 
 def _frame(conn: Connection, since: str | None, until: str | None,
-           client: str | None = None, year: int | None = None) -> pd.DataFrame:
-    frame = stats.load_frame(conn, client_id=_scope(client), year=year)
+           client: str | None = None, year: int | None = None,
+           month: int | None = None) -> pd.DataFrame:
+    frame = stats.load_frame(conn, client_id=_scope(client), year=year, month=month)
     return stats.date_range(frame, since, until)
 
 
 @app.get("/api/summary", response_model=SummaryOut)
 def get_summary(since: str | None = None, until: str | None = None,
-                client: str | None = None, year: int | None = None,
+                client: str | None = None, year: int | None = None, month: int | None = None,
                 conn: Connection = Depends(get_conn)):
-    t = stats.totals(_frame(conn, since, until, client, year))
+    t = stats.totals(_frame(conn, since, until, client, year, month))
     return SummaryOut(
         invoices=t.invoices, total=t.total, tax=t.tax, net=t.net,
         first_date=t.first_date, last_date=t.last_date, flagged=t.flagged,
@@ -324,30 +377,30 @@ def get_summary(since: str | None = None, until: str | None = None,
 
 @app.get("/api/by-category", response_model=list[CategoryRow])
 def get_by_category(since: str | None = None, until: str | None = None,
-                    client: str | None = None, year: int | None = None,
+                    client: str | None = None, year: int | None = None, month: int | None = None,
                     conn: Connection = Depends(get_conn)):
-    return stats.by_category(_frame(conn, since, until, client, year)).to_dict("records")
+    return stats.by_category(_frame(conn, since, until, client, year, month)).to_dict("records")
 
 
 @app.get("/api/by-month", response_model=list[MonthRow])
 def get_by_month(since: str | None = None, until: str | None = None,
-                 client: str | None = None, year: int | None = None,
+                 client: str | None = None, year: int | None = None, month: int | None = None,
                  conn: Connection = Depends(get_conn)):
-    return stats.by_month(_frame(conn, since, until, client, year)).to_dict("records")
+    return stats.by_month(_frame(conn, since, until, client, year, month)).to_dict("records")
 
 
 @app.get("/api/by-vendor", response_model=list[VendorRow])
 def get_by_vendor(since: str | None = None, until: str | None = None,
-                  client: str | None = None, year: int | None = None,
+                  client: str | None = None, year: int | None = None, month: int | None = None,
                   conn: Connection = Depends(get_conn)):
-    return stats.by_vendor(_frame(conn, since, until, client, year)).to_dict("records")
+    return stats.by_vendor(_frame(conn, since, until, client, year, month)).to_dict("records")
 
 
 @app.get("/api/recurring", response_model=list[RecurringRow])
 def get_recurring(since: str | None = None, until: str | None = None,
-                  client: str | None = None, year: int | None = None,
+                  client: str | None = None, year: int | None = None, month: int | None = None,
                   conn: Connection = Depends(get_conn)):
-    frame = _frame(conn, since, until, client, year)
+    frame = _frame(conn, since, until, client, year, month)
     summary = stats.recurring_vendors(frame)
     monthly = stats.recurring_vendor_months(frame)
     months_by_vendor: dict[str, list[dict]] = {
@@ -362,9 +415,9 @@ def get_recurring(since: str | None = None, until: str | None = None,
 
 @app.get("/api/largest", response_model=list[LargestRow])
 def get_largest(n: int = 5, since: str | None = None, until: str | None = None,
-                client: str | None = None, year: int | None = None,
+                client: str | None = None, year: int | None = None, month: int | None = None,
                 conn: Connection = Depends(get_conn)):
-    rows = stats.largest(_frame(conn, since, until, client, year), n).to_dict("records")
+    rows = stats.largest(_frame(conn, since, until, client, year, month), n).to_dict("records")
     for row in rows:
         # stats.largest() keeps `date` as a pandas Timestamp (it's a raw column
         # slice, unlike by_category/by_month which never carry a date column) --
@@ -376,7 +429,7 @@ def get_largest(n: int = 5, since: str | None = None, until: str | None = None,
 
 @app.get("/api/invoices", response_model=list[InvoiceOut])
 def get_invoices(limit: int = 200, client: str | None = None, year: int | None = None,
-                 conn: Connection = Depends(get_conn)):
+                 month: int | None = None, conn: Connection = Depends(get_conn)):
     scope = _scope(client)
     where, params = [], []
     if scope == stats.UNASSIGNED:
@@ -387,6 +440,9 @@ def get_invoices(limit: int = 200, client: str | None = None, year: int | None =
     if year is not None:
         where.append("doc_year = ?")
         params.append(year)
+    if month is not None:
+        where.append("doc_month = ?")
+        params.append(month)
 
     sql = "SELECT * FROM invoices"
     if where:
@@ -399,8 +455,56 @@ def get_invoices(limit: int = 200, client: str | None = None, year: int | None =
         record = dict(row)
         record["needs_review"] = bool(record["needs_review"])
         record["review_reasons"] = json.loads(record["review_reasons"] or "[]")
+        record["file_exists"] = _file_exists(record.get("source_path"))
         out.append(record)
     return out
+
+
+@app.get("/api/vat-summary", response_model=VatSummaryOut)
+def get_vat_summary(since: str | None = None, until: str | None = None,
+                    client: str | None = None, year: int | None = None,
+                    month: int | None = None,
+                    conn: Connection = Depends(get_conn)):
+    """Gelir/Gider and the KDV position for the selected period.
+
+    The invoice-derived figures and the tahakkuk-derived `assessed_vat` are computed
+    independently and both returned. Reconciling them here would hide the one thing
+    worth knowing -- that the receipts and the invoices disagree.
+    """
+    summary = stats.vat_summary(_frame(conn, since, until, client, year, month))
+
+    scope = _scope(client)
+    where, params = [], []
+    if scope == stats.UNASSIGNED:
+        where.append("client_id IS NULL")
+    elif scope is not None:
+        where.append("client_id = ?")
+        params.append(int(scope))
+    if year is not None:
+        where.append("doc_year = ?")
+        params.append(year)
+    if month is not None:
+        where.append("doc_month = ?")
+        params.append(month)
+    # Only KDV receipts: a muhtasar or damga accrual is a real liability but not part
+    # of the VAT position, and summing them together would produce a figure that
+    # matches neither the invoices nor any single receipt.
+    where.append("kind = 'kdv'")
+    where.append("needs_review = 0")
+    row = conn.execute(
+        "SELECT COUNT(*) n, COALESCE(SUM(payable), 0) total FROM declarations WHERE "
+        + " AND ".join(where), params).fetchone()
+
+    return VatSummaryOut(
+        income=summary.income, expense=summary.expense,
+        output_vat=summary.output_vat, input_vat=summary.input_vat,
+        vat_balance=summary.vat_balance, payable=summary.payable,
+        carried_forward=summary.carried_forward,
+        sales_count=summary.sales_count, purchase_count=summary.purchase_count,
+        no_sales_recorded=summary.no_sales_recorded,
+        assessed_vat=float(row["total"]) if row["n"] else None,
+        assessed_receipts=row["n"],
+    )
 
 
 # ---- clients ----------------------------------------------------------------------
@@ -443,8 +547,64 @@ def update_client(client_id: int, payload: ClientUpdate,
     raise HTTPException(404, f"client {client_id} not found")
 
 
+#: Month names for the tree. Index 0 is the "no month folder" bucket.
+_MONTH_LABELS = ("Ay belirtilmemiş", "Ocak", "Şubat", "Mart", "Nisan", "Mayıs",
+                 "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık")
+
+
+@app.get("/api/clients/{client_id}/tree", response_model=list[TreeYear])
+def get_tree(client_id: int, conn: Connection = Depends(get_conn)):
+    """The client's archive as Year > Month > Document type.
+
+    Categories are the *folder names off disk*, taken from source_path, not logical
+    labels invented here. That is the whole point of the tree: it should show what the
+    accountant would see in Explorer, so "Gider Faturaları" and "Beyannameler" appear
+    exactly as they are named on their machine.
+    """
+    rows = conn.execute(
+        "SELECT doc_year, doc_month, source_path, 'invoice' AS kind FROM invoices "
+        "  WHERE client_id = :cid AND doc_year IS NOT NULL "
+        "UNION ALL "
+        "SELECT doc_year, doc_month, source_path, 'declaration' FROM declarations "
+        "  WHERE client_id = :cid "
+        "UNION ALL "
+        "SELECT doc_year, doc_month, source_path, 'document' FROM documents "
+        "  WHERE client_id = :cid",
+        {"cid": client_id},
+    ).fetchall()
+
+    # {year: {month_or_0: {(doc_type, kind): count}}}
+    tree: dict[int, dict[int, dict[tuple[str, str], int]]] = {}
+    for row in rows:
+        year = row["doc_year"]
+        month = row["doc_month"] or 0
+        folder = Path(row["source_path"]).parent.name if row["source_path"] else "?"
+        key = (folder, row["kind"])
+        tree.setdefault(year, {}).setdefault(month, {})
+        tree[year][month][key] = tree[year][month].get(key, 0) + 1
+
+    out: list[TreeYear] = []
+    for year in sorted(tree, reverse=True):
+        months: list[TreeMonth] = []
+        # 0 (no month folder) sorts last: a real month is the common case and should
+        # not be pushed down the list by the leftovers bucket.
+        for month in sorted(tree[year], key=lambda m: (m == 0, m)):
+            categories = [
+                TreeCategory(doc_type=doc_type, kind=kind, count=count)
+                for (doc_type, kind), count in sorted(tree[year][month].items())
+            ]
+            months.append(TreeMonth(
+                month=month or None,
+                label=_MONTH_LABELS[month] if month <= 12 else str(month),
+                count=sum(c.count for c in categories),
+                categories=categories,
+            ))
+        out.append(TreeYear(year=year, count=sum(m.count for m in months), months=months))
+    return out
+
+
 @app.get("/api/clients/{client_id}/declarations", response_model=list[DeclarationRow])
-def get_declarations(client_id: int, year: int | None = None,
+def get_declarations(client_id: int, year: int | None = None, month: int | None = None,
                      conn: Connection = Depends(get_conn)):
     """Ingested beyanname documents.
 
@@ -457,6 +617,9 @@ def get_declarations(client_id: int, year: int | None = None,
     if year is not None:
         sql += " AND doc_year = ?"
         params.append(year)
+    if month is not None:
+        sql += " AND doc_month = ?"
+        params.append(month)
     sql += " ORDER BY doc_year DESC, period DESC, id"
 
     out = []
@@ -470,8 +633,10 @@ def get_declarations(client_id: int, year: int | None = None,
             "taxpayer_tax_id": record["taxpayer_tax_id"],
             "lines": json.loads(record["lines"] or "[]"),
             "doc_year": record["doc_year"],
+            "doc_month": record["doc_month"],
             "filename": Path(record["source_path"]).name,
             "source_path": record["source_path"],
+            "file_exists": _file_exists(record["source_path"]),
             "needs_review": bool(record["needs_review"]),
             "review_reasons": json.loads(record["review_reasons"] or "[]"),
         })
@@ -479,16 +644,19 @@ def get_declarations(client_id: int, year: int | None = None,
 
 
 @app.get("/api/clients/{client_id}/documents", response_model=list[DocumentRow])
-def get_documents(client_id: int, year: int | None = None,
+def get_documents(client_id: int, year: int | None = None, month: int | None = None,
                   conn: Connection = Depends(get_conn)):
-    sql = ("SELECT id, doc_type, doc_year, filename, source_path "
+    sql = ("SELECT id, doc_type, doc_year, doc_month, filename, source_path "
            "FROM documents WHERE client_id = ?")
     params: list = [client_id]
     if year is not None:
         sql += " AND doc_year = ?"
         params.append(year)
-    return [dict(r) for r in conn.execute(sql + " ORDER BY doc_year DESC, doc_type, filename",
-                                          params)]
+    if month is not None:
+        sql += " AND doc_month = ?"
+        params.append(month)
+    rows = conn.execute(sql + " ORDER BY doc_year DESC, doc_type, filename", params)
+    return [{**dict(r), "file_exists": _file_exists(r["source_path"])} for r in rows]
 
 
 # ---- original files ----------------------------------------------------------------
@@ -516,6 +684,22 @@ def get_documents(client_id: int, year: int | None = None,
 class OpenResult(BaseModel):
     opened: str
     revealed: bool = False
+
+
+def _file_exists(source_path: str | None) -> bool:
+    """Whether a stored path still points at a real file.
+
+    One stat() per row. That is fine for a local archive of a few hundred documents and
+    is the only honest way to show the indicator: the database records where a file was
+    at ingest time, and the accountant may have moved or deleted it since.
+    """
+    if not source_path:
+        return False
+    try:
+        return Path(source_path).is_file()
+    except OSError:
+        # A path that is too long, or on a drive that is no longer mounted.
+        return False
 
 
 def _resolve_pdf(source_path: str | None) -> Path:

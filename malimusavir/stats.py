@@ -22,9 +22,13 @@ RECURRING_MAX_MEDIAN_DAYS = 40
 #: "every client". Without it there is no way to ask for the unassigned bucket.
 UNASSIGNED = "none"
 
+#: Imported rather than redefined: clients.py owns these strings, and a drifting copy
+#: here would silently split sales from purchases on the wrong value.
+from .clients import PURCHASE, SALE  # noqa: E402
+
 
 def load_frame(conn: sqlite3.Connection, client_id: int | str | None = None,
-               year: int | None = None) -> pd.DataFrame:
+               year: int | None = None, month: int | None = None) -> pd.DataFrame:
     """All invoices as a DataFrame, with dates parsed and amounts numeric.
 
     ``client_id`` scopes to one client (``UNASSIGNED`` for the pre-client rows, None for
@@ -41,11 +45,17 @@ def load_frame(conn: sqlite3.Connection, client_id: int | str | None = None,
     if year is not None:
         where.append("doc_year = ?")
         params.append(int(year))
+    if month is not None:
+        # The archive month folder, not the invoice's own date. Selecting "Ocak" in the
+        # tree must show what is filed in that folder, including anything misfiled --
+        # that is how a filing error becomes visible instead of silently moving.
+        where.append("doc_month = ?")
+        params.append(int(month))
 
     frame = pd.read_sql_query(
-        "SELECT invoice_no, date, vendor, vendor_tax_id, total_amount, tax_amount, "
+        "SELECT id, invoice_no, date, vendor, vendor_tax_id, total_amount, tax_amount, "
         "net_amount, category, currency, payment_method, needs_review, client_id, "
-        "doc_year, direction FROM invoices"
+        "doc_year, doc_month, direction, source_path FROM invoices"
         + (" WHERE " + " AND ".join(where) if where else ""),
         conn,
         params=params,
@@ -102,6 +112,66 @@ def totals(frame: pd.DataFrame) -> Totals:
         last_date=dates.max().date().isoformat() if not dates.empty else None,
         flagged=int(frame["needs_review"].sum()),
         currencies=currencies,
+    )
+
+
+@dataclass
+class VatSummary:
+    """The KDV position for a period, as an accountant reads it.
+
+    Derived from invoices only. It is NOT the same number as the tahakkuk fişi's
+    `payable`, which is what the tax office actually assessed -- comparing the two is
+    the point, so they are deliberately kept apart rather than merged into one figure.
+    """
+
+    income: float           #: Toplam Gelir -- sales, net of VAT
+    expense: float          #: Toplam Gider -- purchases, net of VAT
+    output_vat: float       #: Hesaplanan KDV -- VAT charged on sales
+    input_vat: float        #: İndirilecek KDV -- VAT paid on purchases
+    sales_count: int
+    purchase_count: int
+    #: True when no invoice is marked as a sale. `direction` defaults to "alis" unless
+    #: the client's own tax_id is on file, so this is usually a missing-tax_id problem
+    #: rather than a client who genuinely sold nothing -- and reporting 0,00 TL income
+    #: as though it were a fact would be misleading.
+    no_sales_recorded: bool = False
+
+    @property
+    def vat_balance(self) -> float:
+        """Hesaplanan − İndirilecek. Positive is payable, negative carries forward."""
+        return round(self.output_vat - self.input_vat, 2)
+
+    @property
+    def payable(self) -> float:
+        """Ödenecek KDV -- zero when input VAT exceeds output."""
+        return max(self.vat_balance, 0.0)
+
+    @property
+    def carried_forward(self) -> float:
+        """Devreden KDV -- the excess input VAT carried to the next period."""
+        return max(-self.vat_balance, 0.0)
+
+
+def vat_summary(frame: pd.DataFrame) -> VatSummary:
+    """Split a period into sales and purchases and compute the KDV position."""
+    if frame.empty:
+        return VatSummary(0.0, 0.0, 0.0, 0.0, 0, 0, no_sales_recorded=True)
+
+    direction = frame["direction"].fillna(PURCHASE)
+    sales = frame[direction == SALE]
+    purchases = frame[direction != SALE]
+
+    def _sum(part: pd.DataFrame, column: str) -> float:
+        return round(float(part[column].fillna(0).sum()), 2)
+
+    return VatSummary(
+        income=_sum(sales, "net_amount"),
+        expense=_sum(purchases, "net_amount"),
+        output_vat=_sum(sales, "tax_amount"),
+        input_vat=_sum(purchases, "tax_amount"),
+        sales_count=len(sales),
+        purchase_count=len(purchases),
+        no_sales_recorded=sales.empty,
     )
 
 

@@ -70,6 +70,10 @@ class ExtractedInvoice:
     #: authoritative for every calculation; this only records where it was filed, so a
     #: mismatch can be flagged as a filing error.
     doc_year: int | None = None
+    #: The archive month folder (1-12), or None when the archive has no month level.
+    #: Never back-filled from `date`: the point of the field is to say where the file
+    #: actually sits, so that a mismatch with the invoice's own date is visible.
+    doc_month: int | None = None
     #: "alis" (purchase) or "satis" (sale), decided by whether the seller's tax id is the
     #: client's own. Drives output-vs-input VAT once a client's sales invoices are loaded.
     direction: str | None = None

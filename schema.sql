@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS declarations (
     taxpayer_tax_id TEXT,              -- VKN on the receipt; confirms it is this client
     lines          TEXT,               -- JSON: the per-tax assessment rows
     doc_year       INTEGER NOT NULL,   -- the folder it was filed under
+    doc_month      INTEGER,            -- the month folder, NULL when not filed by month
     source_path    TEXT NOT NULL,
     content_hash   TEXT NOT NULL,
     raw_text       TEXT,               -- REDACTED text only
@@ -50,6 +51,7 @@ CREATE TABLE IF NOT EXISTS documents (
     client_id    INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
     doc_type     TEXT NOT NULL,        -- the folder name, verbatim
     doc_year     INTEGER NOT NULL,
+    doc_month    INTEGER,
     filename     TEXT NOT NULL,
     source_path  TEXT NOT NULL,
     content_hash TEXT NOT NULL,

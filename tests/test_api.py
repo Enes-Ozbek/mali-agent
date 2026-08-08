@@ -656,3 +656,165 @@ def test_api_routes_are_not_shadowed_by_the_static_mount(client):
     r = client.get("/api/summary")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("application/json")
+
+
+# --- VAT summary, tree and file presence ---------------------------------------------
+
+
+@pytest.fixture
+def vat_client(tmp_path, monkeypatch):
+    """One client with a sale and a purchase in January, plus a KDV tahakkuk."""
+    from malimusavir import clients
+
+    db_path = tmp_path / "vat.db"
+    monkeypatch.setattr(api, "DB_PATH", db_path)
+    conn = db.connect(db_path)
+    acme = clients.resolve(conn, "acme")
+    clients.set_metadata(conn, acme.id, tax_id="1112223334")
+
+    pdf = tmp_path / "satis.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+
+    def add(no, direction, net, tax, month, path=None):
+        invoice = ExtractedInvoice(
+            invoice_no=no, date=f"2026-{month:02d}-10", vendor="V", vendor_tax_id="9",
+            total_amount=net + tax, tax_amount=tax, net_amount=net, category="hizmet",
+            currency="TL", content_hash=f"h-{no}", profile="test",
+            source_path=str(path) if path else None,
+        )
+        invoice.client_id = acme.id
+        invoice.doc_year = 2026
+        invoice.doc_month = month
+        invoice.direction = direction
+        db.upsert_invoice(conn, invoice)
+
+    add("S1", "satis", 10000.0, 2000.0, 1, pdf)     # sale: output VAT 2000
+    add("P1", "alis", 4000.0, 800.0, 1)             # purchase: input VAT 800
+    add("S2", "satis", 5000.0, 1000.0, 2)           # February, must not leak into Jan
+
+    conn.execute(
+        "INSERT INTO declarations (client_id, kind, period, payable, doc_year, "
+        "doc_month, source_path, content_hash, needs_review, ingested_at) "
+        "VALUES (?, 'kdv', '2026-01', 1200.0, 2026, 1, ?, 'h', 0, '2026-02-01T00:00:00')",
+        (acme.id, str(tmp_path / "tahakkuk.pdf")),
+    )
+    conn.commit()
+    conn.close()
+    return TestClient(api.app), acme.id
+
+
+def test_vat_summary_splits_sales_from_purchases(vat_client):
+    client, cid = vat_client
+    body = client.get(f"/api/vat-summary?client={cid}&year=2026&month=1").json()
+    assert body["income"] == pytest.approx(10000.0)
+    assert body["expense"] == pytest.approx(4000.0)
+    assert body["output_vat"] == pytest.approx(2000.0)
+    assert body["input_vat"] == pytest.approx(800.0)
+    assert body["payable"] == pytest.approx(1200.0)
+    assert body["carried_forward"] == pytest.approx(0.0)
+    assert body["no_sales_recorded"] is False
+
+
+def test_vat_summary_scopes_to_the_selected_month(vat_client):
+    """February's sale must not appear in January's figures."""
+    client, cid = vat_client
+    jan = client.get(f"/api/vat-summary?client={cid}&year=2026&month=1").json()
+    feb = client.get(f"/api/vat-summary?client={cid}&year=2026&month=2").json()
+    assert jan["income"] == pytest.approx(10000.0)
+    assert feb["income"] == pytest.approx(5000.0)
+
+
+def test_excess_input_vat_carries_forward_instead_of_going_negative(vat_client):
+    """Devreden KDV: a negative balance is carried, never shown as money owed."""
+    client, cid = vat_client
+    conn = db.connect(api.DB_PATH)
+    conn.execute("UPDATE invoices SET tax_amount = 9000 WHERE invoice_no = 'P1'")
+    conn.commit()
+    conn.close()
+    body = client.get(f"/api/vat-summary?client={cid}&year=2026&month=1").json()
+    assert body["payable"] == pytest.approx(0.0)
+    assert body["carried_forward"] == pytest.approx(7000.0)
+    assert body["vat_balance"] == pytest.approx(-7000.0)
+
+
+def test_the_assessed_figure_is_reported_beside_the_computed_one(vat_client):
+    """The tahakkuk says 1.200,00 and the invoices imply 1.200,00 here -- but they are
+    returned separately so a disagreement stays visible instead of being reconciled."""
+    client, cid = vat_client
+    body = client.get(f"/api/vat-summary?client={cid}&year=2026&month=1").json()
+    assert body["assessed_vat"] == pytest.approx(1200.0)
+    assert body["assessed_receipts"] == 1
+    assert body["payable"] == pytest.approx(1200.0)
+
+
+def test_no_sales_recorded_is_flagged_rather_than_reported_as_zero_income(tmp_path,
+                                                                          monkeypatch):
+    """A client with no tax_id has every invoice classed as a purchase, so "0,00 gelir"
+    would be a missing-data artefact presented as fact."""
+    from malimusavir import clients
+
+    db_path = tmp_path / "nosales.db"
+    monkeypatch.setattr(api, "DB_PATH", db_path)
+    conn = db.connect(db_path)
+    who = clients.resolve(conn, "notaxid")
+    invoice = ExtractedInvoice(
+        invoice_no="X1", date="2026-01-05", vendor="V", vendor_tax_id="9",
+        total_amount=120.0, tax_amount=20.0, net_amount=100.0, category="hizmet",
+        currency="TL", content_hash="h-x1", profile="test",
+    )
+    invoice.client_id = who.id
+    invoice.doc_year = 2026
+    invoice.direction = "alis"
+    db.upsert_invoice(conn, invoice)
+    conn.close()
+
+    body = TestClient(api.app).get(f"/api/vat-summary?client={who.id}").json()
+    assert body["income"] == pytest.approx(0.0)
+    assert body["no_sales_recorded"] is True
+
+
+def test_tree_mirrors_the_folder_layout(vat_client):
+    client, cid = vat_client
+    tree = client.get(f"/api/clients/{cid}/tree").json()
+    assert [y["year"] for y in tree] == [2026]
+    months = {m["label"]: m["count"] for m in tree[0]["months"]}
+    assert months["Ocak"] == 3        # S1 + P1 + the KDV tahakkuk
+    assert months["Şubat"] == 1
+    ocak = next(m for m in tree[0]["months"] if m["label"] == "Ocak")
+    assert {c["kind"] for c in ocak["categories"]} == {"invoice", "declaration"}
+
+
+def test_tree_puts_month_less_documents_in_their_own_bucket_last(vat_client):
+    """Licences filed under the year, not a month, must not be invented into one."""
+    client, cid = vat_client
+    conn = db.connect(api.DB_PATH)
+    conn.execute(
+        "INSERT INTO documents (client_id, doc_type, doc_year, doc_month, filename, "
+        "source_path, content_hash, ingested_at) VALUES (?, 'belgeler', 2026, NULL, "
+        "'levha.pdf', 'C:/a/2026/belgeler/levha.pdf', 'h', '2026-01-01T00:00:00')",
+        (cid,),
+    )
+    conn.commit()
+    conn.close()
+
+    months = client.get(f"/api/clients/{cid}/tree").json()[0]["months"]
+    assert months[-1]["label"] == "Ay belirtilmemiş"
+    assert months[-1]["month"] is None
+    assert months[-1]["categories"][0]["doc_type"] == "belgeler"
+
+
+def test_file_exists_reflects_the_disk(vat_client, tmp_path):
+    client, cid = vat_client
+    rows = {r["invoice_no"]: r for r in
+            client.get(f"/api/invoices?client={cid}&year=2026&month=1").json()}
+    assert rows["S1"]["file_exists"] is True      # fixture wrote satis.pdf
+    assert rows["P1"]["file_exists"] is False     # no source_path at all
+
+
+def test_file_exists_turns_false_when_the_file_is_removed(vat_client, tmp_path):
+    """The archive is the source of truth and moves underneath the database."""
+    client, cid = vat_client
+    (tmp_path / "satis.pdf").unlink()
+    rows = {r["invoice_no"]: r for r in
+            client.get(f"/api/invoices?client={cid}&year=2026&month=1").json()}
+    assert rows["S1"]["file_exists"] is False

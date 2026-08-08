@@ -35,6 +35,10 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 .krow:hover{background:color-mix(in srgb, var(--color-text) 4%, transparent)}
 .crow{cursor:pointer}
 .crow:hover{background:color-mix(in srgb, var(--color-accent) 8%, transparent)}
+.tnode{cursor:pointer;user-select:none}
+.tnode:hover{background:color-mix(in srgb, var(--color-accent) 10%, transparent)}
+.ok{color:var(--color-accent-700)}
+.missing{color:var(--color-neutral-500)}
 .mode{border:0;background:transparent;font:inherit;cursor:pointer;padding:2px 7px;border-radius:3px}
 .link{cursor:pointer;color:var(--color-accent);border:0;background:transparent;font:inherit;padding:0}
 .link:hover{text-decoration:underline}
@@ -102,38 +106,49 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 <div class="cols">
 
 <div class="scroll" style="border-right:1px solid var(--color-divider);overflow:auto">
-<div style="padding:9px 14px;border-bottom:1px solid var(--color-divider)">
-<div style="font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-accent);margin-bottom:5px">Yıl</div>
-<div style="display:flex;flex-wrap:wrap;gap:3px">
-<sc-for list="{{ years }}" as="y" hint-placeholder-count="2">
-<button class="mode" style="font-size:11px;color:{{ y.color }};box-shadow:{{ y.shadow }}" onClick="{{ y.pick }}">{{ y.label }}</button>
-</sc-for>
-</div>
+<div style="display:flex;align-items:baseline;gap:7px;padding:9px 12px;border-bottom:1px solid var(--color-divider)">
+<span style="font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-accent)">Arşiv</span>
+<span class="num" style="margin-left:auto;font-size:10px;opacity:.5">{{ treeCount }}</span>
 </div>
 
-<div style="padding:10px 14px 8px">
-<div style="font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-accent)">Yinelenen</div>
-<div class="num" style="font-family:var(--font-heading);font-weight:400;font-size:21px;line-height:1.1;margin-top:3px">{{ recTotalStr }}</div>
-<div style="font-size:10.5px;opacity:.55">aylık taahhüt</div>
+<div class="treewrap" style="padding:4px 0 12px">
+<div class="tnode" style="padding:5px 12px;font-size:11.5px;font-weight:{{ allWeight }};color:{{ allColor }}" onClick="{{ selectAll }}">Tümü</div>
+
+<sc-for list="{{ tree }}" as="y" hint-placeholder-count="2">
+<div>
+<div class="tnode" style="display:flex;align-items:center;gap:5px;padding:5px 12px;font-size:11.5px;font-weight:{{ y.weight }};color:{{ y.color }}" onClick="{{ y.toggle }}">
+<span style="width:9px;flex:none;opacity:.55;font-size:9px">{{ y.caret }}</span>
+<span style="flex:1">{{ y.year }}</span>
+<span class="num" style="font-size:10px;opacity:.45">{{ y.count }}</span>
 </div>
-<sc-for list="{{ recurring }}" as="r" hint-placeholder-count="2">
-<div style="padding:8px 14px;border-top:1px solid var(--color-divider)">
-<div style="font-size:11.5px;line-height:1.3">{{ r.vendorShort }}</div>
-<div style="display:flex;align-items:baseline;gap:7px;margin-top:3px">
-<span class="num" style="font-size:13.5px">{{ r.aylikStr }}</span>
-<span class="num" style="margin-left:auto;font-size:10px;opacity:.5">{{ r.adet }}× · ~{{ r.gun }}g</span>
+
+<sc-if value="{{ y.open }}" hint-placeholder-val="{{ true }}">
+<sc-for list="{{ y.months }}" as="m" hint-placeholder-count="3">
+<div>
+<div class="tnode" style="display:flex;align-items:center;gap:5px;padding:4px 12px 4px 24px;font-size:11.5px;font-weight:{{ m.weight }};color:{{ m.color }}" onClick="{{ m.toggle }}">
+<span style="width:9px;flex:none;opacity:.55;font-size:9px">{{ m.caret }}</span>
+<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ m.label }}</span>
+<span class="num" style="font-size:10px;opacity:.45">{{ m.count }}</span>
 </div>
+
+<sc-if value="{{ m.open }}" hint-placeholder-val="{{ true }}">
+<sc-for list="{{ m.categories }}" as="c" hint-placeholder-count="2">
+<div class="tnode" style="display:flex;align-items:center;gap:6px;padding:3px 12px 3px 42px;font-size:11px;font-weight:{{ c.weight }};color:{{ c.color }}" onClick="{{ c.pick }}">
+<span style="width:5px;height:5px;border-radius:1px;flex:none;background:{{ c.dot }}"></span>
+<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.label }}</span>
+<span class="num" style="font-size:10px;opacity:.45">{{ c.count }}</span>
 </div>
 </sc-for>
-<div style="padding:10px 14px;border-top:1px solid var(--color-divider)">
-<div style="font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-accent);margin-bottom:5px">Kategoriler</div>
-<sc-for list="{{ cats }}" as="c" hint-placeholder-count="4">
-<div style="display:flex;align-items:center;gap:6px;font-size:11.5px;padding:2px 0">
-<span style="width:6px;height:6px;border-radius:50%;flex:none;background:{{ c.color }}"></span>
-<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.category }}</span>
-<span class="num" style="opacity:.6">{{ c.toplamStr }}</span>
+</sc-if>
 </div>
 </sc-for>
+</sc-if>
+</div>
+</sc-for>
+
+<sc-if value="{{ treeEmpty }}" hint-placeholder-val="{{ false }}">
+<div style="padding:12px;font-size:11px;opacity:.55;line-height:1.5">Bu müşteri için arşiv kaydı yok.</div>
+</sc-if>
 </div>
 </div>
 
@@ -153,42 +168,56 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 <span style="font-size:10.5px;opacity:.55">{{ tahakkukNote }}</span>
 </div>
 <sc-if value="{{ hasTahakkuk }}" hint-placeholder-val="{{ true }}">
-<div style="display:grid;grid-template-columns:70px 78px 1fr 96px 90px 74px;padding:5px 0;margin-top:7px;border-bottom:1px solid var(--color-divider);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:color-mix(in srgb, var(--color-text) 60%, transparent)">
-<span>Tür</span><span>Dönem</span><span>Fiş No</span><span style="text-align:right">Ödenecek</span><span style="text-align:right">Vade</span><span style="text-align:right">Durum</span>
+<div style="display:grid;grid-template-columns:66px 74px 1fr 92px 84px 56px 30px;padding:5px 0;margin-top:7px;border-bottom:1px solid var(--color-divider);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:color-mix(in srgb, var(--color-text) 60%, transparent)">
+<span>Tür</span><span>Dönem</span><span>Fiş No</span><span style="text-align:right">Ödenecek</span><span style="text-align:right">Vade</span><span style="text-align:right">Durum</span><span style="text-align:right">Dosya</span>
 </div>
 <sc-for list="{{ tahakkuklar }}" as="t" hint-placeholder-count="2">
-<div class="krow" style="display:grid;grid-template-columns:70px 78px 1fr 96px 90px 74px;align-items:center;padding:5px 0;border-bottom:1px solid var(--color-divider);font-size:11.5px">
+<div class="krow crow" style="display:grid;grid-template-columns:66px 74px 1fr 92px 84px 56px 30px;align-items:center;padding:5px 0;border-bottom:1px solid var(--color-divider);font-size:11.5px;background:{{ t.rowBg }}" onClick="{{ t.select }}" title="{{ t.path }}">
 <span style="text-transform:uppercase">{{ t.kind }}</span>
 <span class="num" style="opacity:.7">{{ t.period }}</span>
 <span class="num" style="font-size:10px;opacity:.55;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px">{{ t.receiptNo }}</span>
 <span class="num" style="text-align:right">{{ t.payableStr }}</span>
 <span class="num" style="text-align:right;opacity:.7">{{ t.dueStr }}</span>
 <span style="text-align:right"><span class="{{ t.tagClass }}">{{ t.status }}</span></span>
+<span style="text-align:right"><button class="link {{ t.fileClass }}" style="font-size:12px" onClick="{{ t.view }}" title="{{ t.fileTitle }}">{{ t.fileIcon }}</button></span>
 </div>
 </sc-for>
 </sc-if>
 </div>
 
-<div style="display:flex;align-items:flex-end;gap:3px;height:50px;padding:10px 14px 0;border-bottom:1px solid var(--color-divider);flex:none">
-<sc-for list="{{ months }}" as="m" hint-placeholder-count="12">
-<div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%" onMouseEnter="{{ m.hover }}" onMouseLeave="{{ clearHover }}" title="{{ m.title }}">
-<div style-hover="background:var(--color-accent-600)" style="width:100%;background:var(--color-accent-300);height:{{ m.pctShort }}%"></div>
-</div>
-</sc-for>
-<span class="num" style="flex:none;padding-left:10px;font-size:10.5px;opacity:.6;white-space:nowrap">{{ hoverReadout }}</span>
+<div style="padding:10px 14px;border-bottom:1px solid var(--color-divider);flex:none">
+<div style="display:flex;align-items:baseline;gap:9px;margin-bottom:8px">
+<h4 style="margin:0">Mali Özet</h4>
+<span style="font-size:10.5px;opacity:.55">{{ periodLabel }}</span>
 </div>
 
-<div style="display:grid;grid-template-columns:74px minmax(0,1fr) 96px 84px 84px 62px;padding:5px 14px;border-bottom:1px solid var(--color-divider);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:color-mix(in srgb, var(--color-text) 60%, transparent);flex:none">
-<span>Tarih</span><span>Satıcı</span><span>Kategori</span><span style="text-align:right">KDV</span><span style="text-align:right">Toplam</span><span style="text-align:right">Durum</span>
+<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--color-divider);border:1px solid var(--color-divider)">
+<sc-for list="{{ vatCells }}" as="v" hint-placeholder-count="5">
+<div style="background:var(--color-bg);padding:7px 9px">
+<div style="font-size:9px;letter-spacing:.07em;text-transform:uppercase;opacity:.55;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ v.label }}</div>
+<div class="num" style="font-family:var(--font-heading);font-size:{{ v.size }};line-height:1.25;margin-top:2px;color:{{ v.color }}">{{ v.value }}</div>
+<div style="font-size:9.5px;opacity:.45">{{ v.note }}</div>
+</div>
+</sc-for>
+</div>
+
+<sc-if value="{{ hasVatWarning }}" hint-placeholder-val="{{ false }}">
+<div style="margin-top:7px;padding:6px 9px;border-left:2px solid var(--color-accent);background:var(--color-surface);font-size:10.5px;line-height:1.45">{{ vatWarning }}</div>
+</sc-if>
+</div>
+
+<div style="display:grid;grid-template-columns:74px minmax(0,1fr) 96px 84px 84px 58px 30px;padding:5px 14px;border-bottom:1px solid var(--color-divider);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:color-mix(in srgb, var(--color-text) 60%, transparent);flex:none">
+<span>Tarih</span><span>Satıcı</span><span>Kategori</span><span style="text-align:right">KDV</span><span style="text-align:right">Toplam</span><span style="text-align:right">Durum</span><span style="text-align:right">Dosya</span>
 </div>
 <sc-for list="{{ ledger }}" as="i" hint-placeholder-count="10">
-<div class="krow" style="display:grid;grid-template-columns:74px minmax(0,1fr) 96px 84px 84px 62px;align-items:center;padding:3.5px 14px;border-bottom:1px solid var(--color-divider);font-size:11.5px">
+<div class="krow crow" style="display:grid;grid-template-columns:74px minmax(0,1fr) 96px 84px 84px 58px 30px;align-items:center;padding:3.5px 14px;border-bottom:1px solid var(--color-divider);font-size:11.5px;background:{{ i.rowBg }}" onClick="{{ i.select }}" title="{{ i.path }}">
 <span class="num" style="opacity:.65">{{ i.dateTr }}</span>
 <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px">{{ i.vendorShort }}</span>
 <span style="display:flex;align-items:center;gap:5px;font-size:10.5px;overflow:hidden"><span style="width:5px;height:5px;border-radius:50%;flex:none;background:{{ i.color }}"></span>{{ i.category }}</span>
 <span class="num" style="text-align:right;opacity:.6">{{ i.taxStr }}</span>
 <span class="num" style="text-align:right">{{ i.totalStr }}</span>
 <span style="text-align:right"><span class="{{ i.tagClass }}">{{ i.status }}</span></span>
+<span style="text-align:right"><button class="link {{ i.fileClass }}" style="font-size:12px" onClick="{{ i.view }}" title="{{ i.fileTitle }}">{{ i.fileIcon }}</button></span>
 </div>
 </sc-for>
 <div style="padding:8px 14px;font-size:10.5px;opacity:.55">{{ ledgerNote }}</div>
@@ -242,6 +271,24 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 </sc-if>
 </div>
 
+<sc-if value="{{ hasPreview }}" hint-placeholder-val="{{ false }}">
+<div style="flex:none;height:46%;min-height:190px;display:flex;flex-direction:column;border-top:2px solid var(--color-accent)">
+<div style="display:flex;align-items:center;gap:8px;padding:5px 12px;border-bottom:1px solid var(--color-divider);background:var(--color-surface);flex:none">
+<span style="font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ preview.title }}</span>
+<span class="num" style="font-size:9.5px;opacity:.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">{{ preview.path }}</span>
+<button class="btn btn-secondary" style="font-size:10px;padding:2px 7px;flex:none" onClick="{{ preview.openExternal }}">Programda aç</button>
+<button class="btn btn-secondary" style="font-size:10px;padding:2px 7px;flex:none" onClick="{{ preview.reveal }}">Klasör</button>
+<button class="link" style="font-size:13px;flex:none" onClick="{{ closePreview }}" title="Kapat">✕</button>
+</div>
+<sc-if value="{{ preview.exists }}" hint-placeholder-val="{{ true }}">
+<iframe src="{{ preview.url }}" style="flex:1;width:100%;border:0;background:var(--color-neutral-200)" title="{{ preview.title }}"></iframe>
+</sc-if>
+<sc-if value="{{ preview.missing }}" hint-placeholder-val="{{ false }}">
+<div style="flex:1;display:flex;align-items:center;justify-content:center;padding:16px;font-size:11.5px;opacity:.6;text-align:center;line-height:1.5">Bu kayda ait dosya diskte bulunamadı.<br>Arşiv taşınmış ya da dosya silinmiş olabilir.</div>
+</sc-if>
+</div>
+</sc-if>
+
 </div>
 </sc-if>
 
@@ -259,7 +306,7 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 <p style="margin:4px 0 0;font-size:10px;opacity:.6;line-height:1.4">{{ modeNote }}</p>
 </div>
 
-<div class="scroll" style="flex:1;overflow:auto;padding:10px 13px;display:flex;flex-direction:column;gap:10px">
+<div class="scroll" id="chatlog" style="flex:1;overflow:auto;padding:10px 13px;display:flex;flex-direction:column;gap:10px">
 <sc-for list="{{ chat }}" as="m" hint-placeholder-count="2">
 <div style="display:flex;flex-direction:column;gap:4px;align-items:{{ m.align }}">
 <div style="font-size:9px;letter-spacing:.09em;text-transform:uppercase;opacity:.45">{{ m.who }}</div>
@@ -297,10 +344,12 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
   state = {
-    view: 'list', clientId: null, client: null, year: null,
+    view: 'list', clientId: null, client: null, year: null, month: null,
     loading: true, search: '',
     clients: [], sum: null, cats: [], months: [], recurring: [], ledger: [],
-    tahakkuklar: [], docs: [],
+    tahakkuklar: [], docs: [], vat: null,
+    tree: [], openYears: [], openMonths: [], docType: null,
+    preview: null,
     tab: 'genel', folder: null, fileStatus: '',
     draft: '', asking: false, hover: null, useLlm: true,
     chat: []
@@ -360,52 +409,123 @@ class Component extends DCLogic {
   // confidentiality boundary, not a display filter -- but sending it consistently is
   // what keeps the two in agreement.
   scoped(path) {
-    const id = this.state.clientId;
-    const year = this.state.year;
-    const sep = path.includes('?') ? '&' : '?';
-    let q = id === null ? '' : `${sep}client=${encodeURIComponent(id)}`;
-    if (year) q += `${q ? '&' : sep}year=${year}`;
-    return path + q;
+    const { clientId: id, year, month } = this.state;
+    const parts = [];
+    if (id !== null) parts.push(`client=${encodeURIComponent(id)}`);
+    if (year) parts.push(`year=${year}`);
+    // month is only meaningful inside a year; sending it alone would filter across
+    // every year's January at once, which is never what the tree selection means.
+    if (year && month) parts.push(`month=${month}`);
+    if (!parts.length) return path;
+    return path + (path.includes('?') ? '&' : '?') + parts.join('&');
   }
 
   async openClient(client) {
     this.setState({
-      view: 'client', clientId: client.id, client, year: null,
-      tab: 'genel', folder: null,
+      view: 'client', clientId: client.id, client, year: null, month: null,
+      tab: 'genel', folder: null, docType: null, preview: null,
+      tree: [], openYears: [], openMonths: [],
       loading: true, chat: [{ who: 'Yardımcı', text: client.label + ' için kayıtlar yüklendi. Bu müşteriye dair soru sorabilirsiniz.' }]
     });
-    await this.loadClientData();
+    await Promise.all([this.loadTree(), this.loadClientData()]);
+  }
+
+  async loadTree() {
+    const id = this.state.clientId;
+    if (id === null || id < 0) return this.setState({ tree: [] });
+    try {
+      const tree = await fetch(`/api/clients/${id}/tree`).then(r => r.json());
+      // Open the newest year by default: an accountant opening a client is almost
+      // always looking at the current period, and a fully collapsed tree hides that
+      // the archive has anything in it at all.
+      const openYears = tree.length ? [tree[0].year] : [];
+      this.setState({ tree, openYears });
+    } catch (e) {
+      this.setState({ tree: [] });
+    }
   }
 
   async loadClientData() {
     try {
-      const [sum, cats, months, recurring, ledger] = await Promise.all([
+      const scopedQ = this.scoped('').replace(/^\?/, '');
+      const q = scopedQ ? '?' + scopedQ : '';
+      const [sum, cats, months, recurring, ledger, vat] = await Promise.all([
         fetch(this.scoped('/api/summary')).then(r => r.json()),
         fetch(this.scoped('/api/by-category')).then(r => r.json()),
         fetch(this.scoped('/api/by-month')).then(r => r.json()),
         fetch(this.scoped('/api/recurring')).then(r => r.json()),
-        fetch(this.scoped('/api/invoices?limit=300')).then(r => r.json())
+        fetch(this.scoped('/api/invoices?limit=300')).then(r => r.json()),
+        fetch(this.scoped('/api/vat-summary')).then(r => r.json())
       ]);
       let tahakkuklar = [], docs = [];
       if (this.state.clientId !== null && this.state.clientId >= 0) {
-        const y = this.state.year ? `?year=${this.state.year}` : '';
+        const parts = [];
+        if (this.state.year) parts.push(`year=${this.state.year}`);
+        if (this.state.year && this.state.month) parts.push(`month=${this.state.month}`);
+        const sub = parts.length ? '?' + parts.join('&') : '';
         [tahakkuklar, docs] = await Promise.all([
-          fetch(`/api/clients/${this.state.clientId}/declarations${y}`).then(r => r.json()).catch(() => []),
-          fetch(`/api/clients/${this.state.clientId}/documents${y}`).then(r => r.json()).catch(() => [])
+          fetch(`/api/clients/${this.state.clientId}/declarations${sub}`).then(r => r.json()).catch(() => []),
+          fetch(`/api/clients/${this.state.clientId}/documents${sub}`).then(r => r.json()).catch(() => [])
         ]);
       }
-      this.setState({ loading: false, sum, cats, months, recurring, ledger, tahakkuklar, docs });
+      this.setState({ loading: false, sum, cats, months, recurring, ledger, tahakkuklar, docs, vat });
     } catch (e) {
       this.setState({ loading: false });
     }
   }
 
+  // ---- directory tree ------------------------------------------------------------
+
+  toggleYear = (year) => (e) => {
+    if (e && e.stopPropagation) e.stopPropagation();
+    const open = this.state.openYears.includes(year);
+    this.setState({ openYears: open ? this.state.openYears.filter(y => y !== year)
+                                    : [...this.state.openYears, year] });
+    // Clicking a year both expands it and scopes the dashboard to it -- the two are
+    // the same intent, and requiring separate clicks for "show me" and "open" is the
+    // thing that made the old year buttons feel disconnected from the data.
+    this.select(year, null, null);
+  };
+
+  toggleMonth = (year, month) => (e) => {
+    if (e && e.stopPropagation) e.stopPropagation();
+    const key = `${year}-${month}`;
+    const open = this.state.openMonths.includes(key);
+    this.setState({ openMonths: open ? this.state.openMonths.filter(k => k !== key)
+                                     : [...this.state.openMonths, key] });
+    this.select(year, month, null);
+  };
+
+  pickCategory = (year, month, docType) => (e) => {
+    if (e && e.stopPropagation) e.stopPropagation();
+    this.select(year, month, docType);
+  };
+
+  selectAll = () => this.select(null, null, null);
+
+  async select(year, month, docType) {
+    this.setState({ year, month, docType, preview: null, loading: true });
+    await this.loadClientData();
+  }
+
+  // ---- local file preview ---------------------------------------------------------
+
+  selectRow = (kind, row, title) => () => this.setState({
+    preview: {
+      kind, id: row.id, title,
+      path: row.source_path || '',
+      exists: !!row.file_exists,
+    }
+  });
+
+  closePreview = () => this.setState({ preview: null });
+
   back = () => this.setState({
-    view: 'list', clientId: null, client: null, year: null,
-    tab: 'genel', folder: null, fileStatus: '', chat: this.greetAll()
+    view: 'list', clientId: null, client: null, year: null, month: null,
+    tab: 'genel', folder: null, fileStatus: '', chat: this.greetAll(),
+    tree: [], docType: null, preview: null
   });
   onSearch = (e) => this.setState({ search: e.target.value });
-  pickYear = (year) => async () => { this.setState({ year, folder: null }); await this.loadClientData(); };
 
   setTabGenel = () => this.setState({ tab: 'genel', fileStatus: '' });
   setTabDosyalar = () => this.setState({ tab: 'dosyalar', folder: null, fileStatus: '' });
@@ -436,6 +556,21 @@ class Component extends DCLogic {
 
   say(who, text, extra) {
     this.setState(s => ({ chat: [...s.chat, { who, text, ...(extra || {}) }] }));
+    this.scrollChat();
+  }
+
+  /** Keep the newest turn in view.
+   *
+   * Deferred twice: setState only queues a re-render, so scrollHeight is still the
+   * pre-render value on the next microtask. A double rAF lands after the runtime has
+   * actually painted the new message, which is when the container is finally tall
+   * enough to scroll to.
+   */
+  scrollChat() {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const log = document.getElementById('chatlog');
+      if (log) log.scrollTop = log.scrollHeight;
+    }));
   }
 
   onDraft = (e) => this.setState({ draft: e.target.value });
@@ -449,6 +584,7 @@ class Component extends DCLogic {
     const history = this.state.chat.filter(m => m.text)
       .map(m => ({ role: m.who === 'Siz' ? 'user' : 'assistant', content: m.text }));
     this.setState(s => ({ draft: '', asking: true, chat: [...s.chat, { who: 'Siz', text: question }] }));
+    this.scrollChat();      // show your own message immediately, not after the reply
 
     try {
       const res = await fetch('/api/chat', {
@@ -510,17 +646,86 @@ class Component extends DCLogic {
       color: this.CATS[c.category] || 'var(--color-neutral-400)'
     }));
 
-    const monthMax = Math.max(1, ...st.months.map(m => m.toplam));
-    const months = st.months.map(m => ({
-      title: m.ay + ' · ' + this.fmt(m.toplam),
-      pctShort: Math.max(m.toplam / monthMax * 100, 4),
-      hover: () => this.setState({ hover: m.ay + ' · ' + this.fmt(m.toplam) + ' · ' + m.adet + ' fatura' })
-    }));
-
     const recurring = st.recurring.map(r => ({
       vendorShort: this.shortVendor(r.vendor), adet: r.adet,
       gun: Math.round(r.ortalama_gun), aylikStr: this.fmt(r.aylik_ortalama).replace(' TL', '')
     }));
+
+    // ---- directory tree ----------------------------------------------------------
+    const sel = st.preview;
+    const tree = st.tree.map(y => {
+      const yearOpen = st.openYears.includes(y.year);
+      const yearActive = st.year === y.year && st.month === null && !st.docType;
+      return {
+        year: String(y.year), count: y.count,
+        open: yearOpen, caret: yearOpen ? '▾' : '▸',
+        weight: yearActive ? '600' : '400',
+        color: yearActive ? acc : 'inherit',
+        toggle: this.toggleYear(y.year),
+        months: y.months.map(m => {
+          const key = `${y.year}-${m.month}`;
+          const monthOpen = st.openMonths.includes(key);
+          const monthActive = st.year === y.year && st.month === m.month && !st.docType;
+          return {
+            label: m.label, count: m.count,
+            open: monthOpen, caret: monthOpen ? '▾' : '▸',
+            weight: monthActive ? '600' : '400',
+            color: monthActive ? acc : 'inherit',
+            toggle: this.toggleMonth(y.year, m.month),
+            categories: m.categories.map(c => {
+              const catActive = st.year === y.year && st.month === m.month
+                && st.docType === c.doc_type;
+              return {
+                label: c.doc_type, count: c.count,
+                weight: catActive ? '600' : '400',
+                color: catActive ? acc : 'inherit',
+                dot: c.kind === 'invoice' ? 'var(--color-accent-600)'
+                   : c.kind === 'declaration' ? 'var(--color-accent-300)'
+                   : 'var(--color-neutral-400)',
+                pick: this.pickCategory(y.year, m.month, c.doc_type)
+              };
+            })
+          };
+        })
+      };
+    });
+    const allActive = st.year === null;
+
+    // ---- financial summary -------------------------------------------------------
+    const vat = st.vat || {};
+    const money = (n) => this.fmt(n).replace(' TL', '');
+    const balance = vat.vat_balance || 0;
+    const vatCells = [
+      { label: 'Toplam Gelir', value: money(vat.income), size: '17px',
+        color: 'inherit', note: `${vat.sales_count || 0} satış` },
+      { label: 'Toplam Gider', value: money(vat.expense), size: '17px',
+        color: 'inherit', note: `${vat.purchase_count || 0} alış` },
+      { label: balance >= 0 ? 'Ödenecek KDV' : 'Devreden KDV',
+        value: money(balance >= 0 ? vat.payable : vat.carried_forward), size: '19px',
+        color: acc,
+        note: vat.assessed_receipts
+          ? `tahakkuk: ${money(vat.assessed_vat)}` : 'tahakkuk fişi yok' },
+      { label: 'Hesaplanan KDV', value: money(vat.output_vat), size: '15px',
+        color: 'inherit', note: 'satışlardan' },
+      { label: 'İndirilecek KDV', value: money(vat.input_vat), size: '15px',
+        color: 'inherit', note: 'alışlardan' },
+      { label: 'Fark', value: money(Math.abs(balance)), size: '15px',
+        color: 'inherit', note: balance >= 0 ? 'ödenecek' : 'devreden' }
+    ];
+
+    // Two independent numbers: what the invoices imply, and what the tax office
+    // actually assessed. A gap is a finding, not a rounding artefact, so it is stated
+    // rather than smoothed over.
+    let vatWarning = '';
+    if (vat.no_sales_recorded && (vat.purchase_count || 0) > 0) {
+      vatWarning = 'Hiçbir fatura satış olarak işaretlenmemiş; gelir 0,00 TL görünüyor. '
+        + 'Bu genelde müşterinin VKN/TCKN bilgisinin eksik olmasından kaynaklanır — '
+        + 'VKN girilene kadar tüm faturalar alış sayılır.';
+    } else if (vat.assessed_receipts && Math.abs((vat.assessed_vat || 0) - (vat.payable || 0)) > 0.02) {
+      vatWarning = `Faturalardan hesaplanan KDV ${money(vat.payable)} TL, `
+        + `tahakkuk fişindeki tutar ${money(vat.assessed_vat)} TL. `
+        + 'İki rakam uyuşmuyor — fişleri kontrol edin.';
+    }
 
     const ledger = st.ledger.map(i => ({
       dateTr: this.trDate(i.date),
@@ -529,7 +734,15 @@ class Component extends DCLogic {
       totalStr: this.fmt(i.total_amount).replace(' TL', ''),
       color: this.CATS[i.category] || 'var(--color-neutral-400)',
       status: i.needs_review ? 'İncele' : 'Tamam',
-      tagClass: i.needs_review ? 'tag tag-outline' : 'tag tag-neutral'
+      tagClass: i.needs_review ? 'tag tag-outline' : 'tag tag-neutral',
+      path: i.source_path || 'dosya yolu kayıtlı değil',
+      fileIcon: i.file_exists ? '✓' : '⚠',
+      fileClass: i.file_exists ? 'ok' : 'missing',
+      fileTitle: i.file_exists ? 'Görüntüle' : 'Dosya diskte bulunamadı',
+      rowBg: sel && sel.kind === 'invoices' && sel.id === i.id
+        ? 'color-mix(in srgb, var(--color-accent) 12%, transparent)' : 'transparent',
+      select: this.selectRow('invoices', i, this.shortVendor(i.vendor) || i.invoice_no),
+      view: this.selectRow('invoices', i, this.shortVendor(i.vendor) || i.invoice_no)
     }));
 
     const tahakkuklar = st.tahakkuklar.map(t => ({
@@ -541,25 +754,32 @@ class Component extends DCLogic {
       payableStr: t.needs_review ? '—' : this.fmt(t.payable).replace(' TL', ''),
       dueStr: this.trDate(t.due_date),
       status: t.needs_review ? 'İncele' : 'Tamam',
-      tagClass: t.needs_review ? 'tag tag-outline' : 'tag tag-neutral'
+      tagClass: t.needs_review ? 'tag tag-outline' : 'tag tag-neutral',
+      path: t.source_path || 'dosya yolu kayıtlı değil',
+      fileIcon: t.file_exists ? '✓' : '⚠',
+      fileClass: t.file_exists ? 'ok' : 'missing',
+      fileTitle: t.file_exists ? 'Görüntüle' : 'Dosya diskte bulunamadı',
+      rowBg: sel && sel.kind === 'declarations' && sel.id === t.id
+        ? 'color-mix(in srgb, var(--color-accent) 12%, transparent)' : 'transparent',
+      select: this.selectRow('declarations', t, (this.KIND[t.kind] || 'Tahakkuk') + ' fişi'),
+      view: this.selectRow('declarations', t, (this.KIND[t.kind] || 'Tahakkuk') + ' fişi')
     }));
 
     // ---- Dosyalar: files grouped into month folders --------------------------------
     // st.ledger/tahakkuklar are already year-scoped server-side (scoped() carries
     // st.year), so grouping them here by the month of their own date/period is enough
     // to reconstruct the archive's folder view without a dedicated endpoint.
+    // Grouped by doc_month -- the archive folder -- exactly as the tree does. Using the
+    // document's own date here instead would give two different "Ocak"s in one screen
+    // that disagree precisely when a file is misfiled, which is when it matters most.
     const monthGroups = {};
     if (st.year) {
-      st.ledger.forEach(i => {
-        if (!i.date) return;
-        const m = i.date.slice(5, 7);
-        (monthGroups[m] || (monthGroups[m] = { invoices: [], decls: [] })).invoices.push(i);
-      });
-      st.tahakkuklar.forEach(t => {
-        if (!t.period) return;
-        const m = t.period.slice(5, 7);
-        (monthGroups[m] || (monthGroups[m] = { invoices: [], decls: [] })).decls.push(t);
-      });
+      const bucket = (n) => {
+        const key = String(n).padStart(2, '0');
+        return monthGroups[key] || (monthGroups[key] = { invoices: [], decls: [] });
+      };
+      st.ledger.forEach(i => { if (i.doc_month) bucket(i.doc_month).invoices.push(i); });
+      st.tahakkuklar.forEach(t => { if (t.doc_month) bucket(t.doc_month).decls.push(t); });
     }
     const monthKeys = Object.keys(monthGroups).sort();
     const folders = monthKeys.map(m => ({
@@ -620,14 +840,12 @@ class Component extends DCLogic {
       }
     }
 
-    const clientYears = (st.client && st.client.years) || [];
-    const years = [{ label: 'Tümü', value: null }]
-      .concat(clientYears.map(y => ({ label: String(y), value: y })))
-      .map(y => ({
-        label: y.label, pick: this.pickYear(y.value),
-        color: st.year === y.value ? acc : 'inherit',
-        shadow: st.year === y.value ? 'inset 0 0 0 1px ' + acc : 'none'
-      }));
+    // What the user has selected in the tree, in words -- used for the panel subtitle
+    // and to build the assistant's suggested prompts.
+    const monthName = st.month ? this.MONTHS[st.month - 1] : null;
+    const periodLabel = !st.year ? 'tüm dönemler'
+      : monthName ? `${monthName} ${st.year}${st.docType ? ' · ' + st.docType : ''}`
+      : String(st.year);
 
     const chat = st.chat.map(m => ({
       who: m.who, text: m.text,
@@ -668,9 +886,31 @@ class Component extends DCLogic {
           : ''
       },
       back: this.back,
-      years,
 
-      cats, months, recurring, ledger, tahakkuklar,
+      tree, treeEmpty: tree.length === 0,
+      treeCount: st.tree.reduce((s, y) => s + y.count, 0) + ' belge',
+      selectAll: this.selectAll,
+      allWeight: allActive ? '600' : '400',
+      allColor: allActive ? acc : 'inherit',
+
+      periodLabel, vatCells,
+      vatWarning, hasVatWarning: !!vatWarning,
+
+      hasPreview: !!st.preview,
+      preview: {
+        title: (st.preview && st.preview.title) || '',
+        path: (st.preview && st.preview.path) || '',
+        exists: !!(st.preview && st.preview.exists),
+        missing: !!(st.preview && !st.preview.exists),
+        url: st.preview ? `/api/${st.preview.kind}/${st.preview.id}/file` : '',
+        openExternal: st.preview
+          ? this.openFile(st.preview.kind, st.preview.id, false) : (() => {}),
+        reveal: st.preview
+          ? this.openFile(st.preview.kind, st.preview.id, true) : (() => {})
+      },
+      closePreview: this.closePreview,
+
+      cats, recurring, ledger, tahakkuklar,
       hasTahakkuk: tahakkuklar.length > 0,
       tahakkukNote: tahakkuklar.length
         ? `${tahakkuklar.length} kayıt`
@@ -689,10 +929,8 @@ class Component extends DCLogic {
       folders, noFolders: folders.length === 0,
       fileRows, fileListNote, backToFolders: this.backToFolders,
       fileStatus: st.fileStatus, hasFileStatus: !!st.fileStatus,
-      recTotalStr: this.fmt(st.recurring.reduce((s, r) => s + (r.aylik_ortalama || 0), 0)).replace(' TL', ''),
-      ledgerNote: st.loading ? 'Yükleniyor…' : `${ledger.length} fatura gösteriliyor.`,
-      hoverReadout: st.hover || 'bir aya gelin',
-      clearHover: () => this.setState({ hover: null }),
+      ledgerNote: st.loading ? 'Yükleniyor…'
+        : `${ledger.length} fatura · ${periodLabel}`,
 
       chat,
       draft: st.draft, onDraft: this.onDraft, onKey: this.onKey, send: this.send,
@@ -700,11 +938,29 @@ class Component extends DCLogic {
       // clientId is null on the list view, so /api/chat answers across every client.
       chatPlaceholder: st.view === 'list'
         ? 'Tüm müşterilere dair sorun…' : 'Bu müşteriye dair sorun…',
+      // Chips follow the tree selection, so they always ask about what is on screen.
+      // The question text carries the period explicitly ("Ocak 2026 ...") rather than
+      // relying on the panel scope, because the router reads the question, not the UI.
       prompts: st.view === 'list'
         ? [
             { label: 'Toplam', ask: askNow('Toplam ne kadar harcandı?') },
             { label: 'Kategoriler', ask: askNow('Kategorilere göre dağılım nedir?') },
             { label: 'En pahalı fatura', ask: askNow('En pahalı fatura hangisi?') }
+          ]
+        : monthName
+        ? [
+            { label: `${monthName} KDV özeti`,
+              ask: askNow(`${monthName} ${st.year} KDV özetini çıkar`) },
+            { label: 'En yüksek gider',
+              ask: askNow(`${monthName} ${st.year} en pahalı fatura hangisi?`) },
+            { label: `${monthName} toplamı`,
+              ask: askNow(`${monthName} ${st.year} toplam ne kadar?`) }
+          ]
+        : st.year
+        ? [
+            { label: `${st.year} toplamı`, ask: askNow(`${st.year} yılında toplam ne kadar?`) },
+            { label: 'Aylık dağılım', ask: askNow(`${st.year} aylara göre ne kadar?`) },
+            { label: 'En pahalı fatura', ask: askNow(`${st.year} en pahalı fatura hangisi?`) }
           ]
         : [
             { label: 'Toplam harcama', ask: askNow('Toplam ne kadar harcadı?') },

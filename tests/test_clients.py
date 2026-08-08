@@ -258,3 +258,72 @@ def test_missing_archive_root_is_reported(tmp_path):
     result = archive.walk(tmp_path / "yok")
     assert result.items == []
     assert result.problems and "bulunamadı" in result.problems[0].reason
+
+# --- the optional <month>/ level ------------------------------------------------------
+#
+# The archive may file documents as Year/Month/Type or as Year/Type. Both are walked;
+# the month is recorded when the folder says so and left None when it does not. It is
+# never back-filled from the document's own date -- the field exists to say where the
+# file physically sits, so inventing it would defeat the purpose.
+
+
+@pytest.mark.parametrize(
+    ("folder", "expected"),
+    [
+        ("Ocak", 1), ("ocak", 1), ("OCAK", 1), ("Aralık", 12), ("Şubat", 2),
+        ("01", 1), ("1", 1), ("09", 9), ("12", 12),
+        ("01-Ocak", 1), ("03_Mart", 3), ("Ocak 2026", 1),
+        ("faturalar", None), ("beyannameler", None), ("tahakkuk", None),
+        ("belgeler", None), ("13", None), ("0", None), ("", None),
+    ],
+)
+def test_parse_month(folder, expected):
+    assert archive.parse_month(folder) == expected
+
+
+def test_walk_reads_the_month_folder(tmp_path):
+    pdf = tmp_path / "mehmet" / "2026" / "Ocak" / "faturalar" / "a.pdf"
+    pdf.parent.mkdir(parents=True)
+    pdf.write_bytes(b"%PDF-1.4")
+
+    result = archive.walk(tmp_path)
+    assert len(result.items) == 1
+    item = result.items[0]
+    assert (item.year, item.month, item.month_folder) == (2026, 1, "Ocak")
+    assert item.doc_type == "faturalar"
+    assert item.kind == archive.Kind.INVOICE
+
+
+def test_an_archive_without_months_still_walks(tmp_path):
+    """The layout that existed before the month level must keep working."""
+    pdf = tmp_path / "mehmet" / "2026" / "faturalar" / "a.pdf"
+    pdf.parent.mkdir(parents=True)
+    pdf.write_bytes(b"%PDF-1.4")
+
+    result = archive.walk(tmp_path)
+    assert len(result.items) == 1
+    assert result.items[0].month is None
+    assert not result.problems
+
+
+def test_both_layouts_can_coexist_under_one_year(tmp_path):
+    year = tmp_path / "mehmet" / "2026"
+    (year / "Ocak" / "faturalar").mkdir(parents=True)
+    (year / "Ocak" / "faturalar" / "a.pdf").write_bytes(b"%PDF-1.4")
+    (year / "belgeler").mkdir(parents=True)
+    (year / "belgeler" / "levha.pdf").write_bytes(b"%PDF-1.4")
+
+    months = {i.path.name: i.month for i in archive.walk(tmp_path).items}
+    assert months == {"a.pdf": 1, "levha.pdf": None}
+
+
+def test_a_month_folder_with_no_type_folder_is_reported_not_guessed(tmp_path):
+    """PDFs loose in a month folder have no document type; say so rather than
+    inventing one."""
+    loose = tmp_path / "mehmet" / "2026" / "Ocak" / "a.pdf"
+    loose.parent.mkdir(parents=True)
+    loose.write_bytes(b"%PDF-1.4")
+
+    result = archive.walk(tmp_path)
+    assert result.items == []
+    assert any("belge türü" in p.reason for p in result.problems)

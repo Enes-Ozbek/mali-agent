@@ -53,6 +53,8 @@ _INVOICE_COLUMNS = (
     ("client_id", "INTEGER REFERENCES clients(id)"),
     ("doc_year", "INTEGER"),
     ("direction", "TEXT"),
+    # The archive gained an optional <month>/ level between year and document type.
+    ("doc_month", "INTEGER"),
 )
 
 #: Added when tahakkuk extraction replaced "store the PDF unparsed".
@@ -64,13 +66,20 @@ _DECLARATION_COLUMNS = (
     ("receipt_no", "TEXT"),
     ("taxpayer_tax_id", "TEXT"),
     ("lines", "TEXT"),
+    ("doc_month", "INTEGER"),
+)
+
+#: documents/ predates the month level too.
+_DOCUMENT_COLUMNS = (
+    ("doc_month", "INTEGER"),
 )
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Bring an existing database up to the current schema. Idempotent."""
     for table, columns in (("invoices", _INVOICE_COLUMNS),
-                           ("declarations", _DECLARATION_COLUMNS)):
+                           ("declarations", _DECLARATION_COLUMNS),
+                           ("documents", _DOCUMENT_COLUMNS)):
         existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
         if not existing:
             continue  # schema.sql just created it with every column already present
@@ -140,6 +149,7 @@ def _to_payload(invoice: ExtractedInvoice) -> dict[str, Any]:
     payload.update(
         client_id=invoice.client_id,
         doc_year=invoice.doc_year,
+        doc_month=invoice.doc_month,
         direction=invoice.direction,
         raw_text=invoice.raw_text,
         source_path=invoice.source_path,

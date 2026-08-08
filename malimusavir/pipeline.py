@@ -190,6 +190,7 @@ def _ingest_invoice(conn, item, client, report: ArchiveReport, *, use_llm: bool)
 
     invoice.client_id = client.id
     invoice.doc_year = item.year
+    invoice.doc_month = item.month
     invoice.direction = clients_mod.direction_for(client, invoice.vendor_tax_id)
 
     # The invoice's own date rules every calculation; the folder only says where it was
@@ -198,6 +199,12 @@ def _ingest_invoice(conn, item, client, report: ArchiveReport, *, use_llm: bool)
     if invoice.date and not invoice.date.startswith(str(item.year)):
         invoice.review_reasons.append(f"misfiled:{item.year}")
         report.misfiled.append(f"{item.path.name}: {invoice.date} -> {item.year}/")
+    elif item.month and invoice.date and int(invoice.date[5:7]) != item.month:
+        # Same rule one level down. Only checked when the year agrees, so a
+        # wrongly-filed document is reported once with the most useful message.
+        invoice.review_reasons.append(f"misfiled_month:{item.month}")
+        report.misfiled.append(
+            f"{item.path.name}: {invoice.date} -> {item.year}/{item.month_folder}/")
 
     result = db.upsert_invoice(conn, invoice)
     setattr(report.invoices, result.value, getattr(report.invoices, result.value) + 1)
@@ -244,12 +251,12 @@ def _record_declaration(conn, item, client) -> int:
         conn,
         "INSERT OR IGNORE INTO declarations "
         "(client_id, kind, period, accrued, offset_amount, payable, due_date, "
-        " issue_date, receipt_no, taxpayer_tax_id, lines, doc_year, source_path, "
-        " content_hash, raw_text, needs_review, review_reasons, ingested_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " issue_date, receipt_no, taxpayer_tax_id, lines, doc_year, doc_month, "
+        " source_path, content_hash, raw_text, needs_review, review_reasons, ingested_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (client.id, parsed.kind, parsed.period, accrued, offset, parsed.total_payable,
          parsed.due_date, parsed.issue_date, parsed.receipt_no, parsed.taxpayer_tax_id,
-         lines, item.year, str(item.path), doc.content_hash, doc.text,
+         lines, item.year, item.month, str(item.path), doc.content_hash, doc.text,
          int(bool(reasons)), json.dumps(reasons, ensure_ascii=False), _now()),
     )
 
@@ -259,10 +266,11 @@ def _record_document(conn, item, client) -> int:
     return _insert_ignore(
         conn,
         "INSERT OR IGNORE INTO documents "
-        "(client_id, doc_type, doc_year, filename, source_path, content_hash, ingested_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (client.id, item.doc_type, item.year, item.path.name, str(item.path),
-         doc.content_hash, _now()),
+        "(client_id, doc_type, doc_year, doc_month, filename, source_path, "
+        " content_hash, ingested_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (client.id, item.doc_type, item.year, item.month, item.path.name,
+         str(item.path), doc.content_hash, _now()),
     )
 
 
