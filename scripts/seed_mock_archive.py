@@ -380,9 +380,19 @@ _INVALID_FS = re.compile(r'[\\/:*?"<>|]')
 def _safe_folder(name: str) -> str:
     # Windows silently drops trailing dots/spaces when a directory is created, so a name
     # ending "Ltd. Şti." becomes "Ltd. Şti" on disk. Stripping it here up front keeps the
-    # folder name (used for clients.resolve before ingest) identical to what archive.walk
-    # will actually see after ingest -- otherwise the two runs create two client rows.
+    # folder name identical to what archive.walk will actually see afterwards --
+    # otherwise the two would disagree and create a second client row.
     return _INVALID_FS.sub("_", name).strip().rstrip(". ")
+
+
+def _client_folder(client: dict) -> str:
+    """"<VKN/TCKN> - <Ünvan>" -- the practice's folder naming convention.
+
+    Putting the tax number in the folder is what lets ingest fill it in automatically,
+    which in turn is what makes the sales/purchase split and the Gelir figure work
+    without anyone typing a VKN into the UI.
+    """
+    return _safe_folder(f"{client['tax_number']} - {client['commercial_title']}")
 
 
 def _money(value: float) -> str:
@@ -485,6 +495,53 @@ def _tahakkuk_pdf(path: Path, *, client, declaration: dict, period_year: int,
     _draw(path, lines)
 
 
+def _beyanname_pdf(path: Path, *, client, declaration: dict, declaration_id: str,
+                    period_year: int, period_month: int) -> None:
+    """The filed declaration -- the system output, not the accrual receipt.
+
+    Deliberately laid out unlike a tahakkuk fişi, because it is a different document.
+    tahakkuk.parse() should refuse it rather than read it as a receipt, and the row
+    should land flagged for review; that is what stops an unparsed layout being
+    presented as extracted fact.
+    """
+    kind = ("MUHTASAR VE PRİM HİZMET BEYANNAMESİ" if declaration["type"] == "MUHSGK"
+            else "KATMA DEĞER VERGİSİ BEYANNAMESİ (KDV1)")
+    lines = [
+        "T.C. GELİR İDARESİ BAŞKANLIĞI",
+        kind,
+        "",
+        f"Mükellef        : {client['commercial_title']}",
+        f"Vergi No        : {client['tax_number']}",
+        f"Vergi Dairesi   : {client['tax_office']}",
+        f"Dönem           : {period_month:02d}/{period_year}",
+        f"Onay No         : {declaration_id}",
+        f"Gönderim Tarihi : {_iso_to_tr(declaration['filing_date'])}",
+        "",
+        f"Ödenmesi Gereken Vergi : {_money(declaration['amount_due'])} TL",
+        f"Durum                  : {declaration['status']}",
+    ]
+    _draw(path, lines)
+
+
+def _bank_statement(path: Path, *, client, records: dict) -> None:
+    """A bank statement as the bank actually exports it -- a spreadsheet, not a PDF."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = ["Tarih;Aciklama;Borc;Alacak;Bakiye"]
+    balance = 0.0
+    for invoice in records.get("invoices", []):
+        amount = invoice["grand_total"]
+        incoming = invoice["direction"] == "SATIŞ"
+        balance += amount if incoming else -amount
+        rows.append(";".join([
+            invoice["issue_date"].split("T")[0],
+            f"{invoice['counterparty']['title']} - {invoice['invoice_number']}",
+            "" if incoming else _money(amount),
+            _money(amount) if incoming else "",
+            _money(balance),
+        ]))
+    path.write_text("\n".join(rows), encoding="utf-8-sig")
+
+
 def _document_pdf(path: Path, *, client, filename: str) -> None:
     """A generic archived document -- unlike invoices and declarations, its content is
     never parsed (archive.py stores it as-is), so the text only needs to be plausible."""
@@ -502,25 +559,44 @@ def _document_pdf(path: Path, *, client, filename: str) -> None:
 
 def build_archive(root: Path) -> None:
     for client in MOCK_DATA["agency_clients"]:
-        folder = _safe_folder(client["owner_name"] or client["commercial_title"])
+        folder = _client_folder(client)
         for year_str, months in client["financial_records"].items():
             year = int(year_str)
-            # <client>/<year>/<month>/<doc type>/ -- the layout the practice actually
-            # uses, so the UI tree can mirror the disk instead of guessing months from
-            # document dates.
+            # <VKN - Ünvan>/<year>/<NN_Ay>/<N_Kategori>/ -- the practice's standard
+            # layout. Sales and purchases are separate folders, which is what tells the
+            # ingest which side of the ledger an invoice belongs on.
             for month_name, records in months.items():
                 month_num = MONTHS_TR.index(month_name) + 1
-                month_dir = root / folder / year_str / f"{month_num:02d}-{month_name}"
-                for invoice in records.get("invoices", []):
-                    dest = month_dir / "faturalar" / f"{invoice['invoice_number']}.pdf"
-                    _invoice_pdf(dest, client=client, invoice=invoice)
-                for decl in records.get("beyannameler", []):
-                    dest = month_dir / "tahakkuk" / f"{decl['accrual_receipt_no']}.pdf"
-                    _tahakkuk_pdf(dest, client=client, declaration=decl,
-                                  period_year=year, period_month=month_num)
+                month_dir = root / folder / year_str / f"{month_num:02d}_{month_name}"
 
-            # Licences and contracts belong to the year, not to a month, so they stay
-            # directly under it. Exercises the mixed layout the walker has to support.
+                for invoice in records.get("invoices", []):
+                    category = ("1_Gelir_Faturalari" if invoice["direction"] == "SATIŞ"
+                                else "2_Gider_Faturalari")
+                    dest = month_dir / category / f"{invoice['invoice_number']}.pdf"
+                    _invoice_pdf(dest, client=client, invoice=invoice)
+
+                for decl in records.get("beyannameler", []):
+                    # The filed declaration and the accrual receipt are two different
+                    # documents of the same event, and practices keep them apart.
+                    beyanname_id = (f"BEY-{year}-{month_num:02d}-{decl['type']}-"
+                                    f"{client['tax_number'][-4:]}")
+                    _beyanname_pdf(
+                        month_dir / "3_Beyannameler" / f"{beyanname_id}.pdf",
+                        client=client, declaration=decl, declaration_id=beyanname_id,
+                        period_year=year, period_month=month_num)
+                    _tahakkuk_pdf(
+                        month_dir / "4_Tahakkuklar" / f"{decl['accrual_receipt_no']}.pdf",
+                        client=client, declaration=decl,
+                        period_year=year, period_month=month_num)
+
+                # Bank statements arrive as spreadsheets, not PDFs -- the walker has to
+                # store them without trying to read them.
+                _bank_statement(
+                    month_dir / "5_Banka_Ekstreleri" / f"{year}_{month_num:02d}_ekstre.csv",
+                    client=client, records=records)
+
+            # Licences and contracts belong to the year, not a month, so they stay
+            # directly under it. Exercises the mixed layout the walker must support.
             for doc in client.get("documents", []):
                 dest = root / folder / year_str / doc["doc_type"] / doc["filename"]
                 _document_pdf(dest, client=client, filename=doc["filename"])
@@ -543,20 +619,14 @@ def main() -> None:
     from malimusavir import clients as clients_mod, db, pipeline
 
     conn = db.connect(args.db)
-
-    # tax_id must be on file *before* ingest: direction_for() compares each invoice's
-    # seller tax id against the client's own, and with no tax_id every invoice reads as
-    # a purchase regardless of who actually issued it.
-    for client in MOCK_DATA["agency_clients"]:
-        folder = _safe_folder(client["owner_name"] or client["commercial_title"])
-        resolved = clients_mod.resolve(conn, folder)
-        clients_mod.set_metadata(
-            conn, resolved.id,
-            tax_id=client["tax_number"], form=client["company_type"],
-            city=client["tax_office"], display=client["commercial_title"],
-        )
-
     report = pipeline.ingest_archive(conn, root)
+
+    # tax_id and the display name come out of the folder name during ingest. Only the
+    # things the folder cannot carry are filled in here.
+    for client in MOCK_DATA["agency_clients"]:
+        resolved = clients_mod.resolve_folder(conn, _client_folder(client))
+        clients_mod.set_metadata(conn, resolved.id, form=client["company_type"],
+                                 city=client["tax_office"])
     conn.close()
 
     print(f"Clients: {', '.join(report.clients)}")

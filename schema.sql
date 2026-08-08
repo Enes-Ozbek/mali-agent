@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS declarations (
     lines          TEXT,               -- JSON: the per-tax assessment rows
     doc_year       INTEGER NOT NULL,   -- the folder it was filed under
     doc_month      INTEGER,            -- the month folder, NULL when not filed by month
+    doc_type       TEXT,               -- the category folder, verbatim
     source_path    TEXT NOT NULL,
     content_hash   TEXT NOT NULL,
     raw_text       TEXT,               -- REDACTED text only

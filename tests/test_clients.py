@@ -327,3 +327,132 @@ def test_a_month_folder_with_no_type_folder_is_reported_not_guessed(tmp_path):
     result = archive.walk(tmp_path)
     assert result.items == []
     assert any("belge türü" in p.reason for p in result.problems)
+
+
+# --- the practice's standard folder convention ----------------------------------------
+#
+#   [VKN/TCKN - Ünvan]/<year>/<NN_Ay>/<N_Kategori>/
+#
+# Two things in that layout are load-bearing beyond navigation: the client folder
+# carries the taxpayer's own tax number, and the category folder states whether the
+# invoices inside are sales or purchases.
+
+
+@pytest.mark.parametrize(
+    ("folder", "kind"),
+    [
+        ("1_Gelir_Faturalari", archive.Kind.INVOICE),
+        ("2_Gider_Faturalari", archive.Kind.INVOICE),
+        ("3_Beyannameler", archive.Kind.DECLARATION),
+        ("4_Tahakkuklar", archive.Kind.DECLARATION),
+        ("5_Banka_Ekstreleri", archive.Kind.DOCUMENT),
+        # the pre-numbering names must keep working
+        ("faturalar", archive.Kind.INVOICE),
+        ("tahakkuk", archive.Kind.DECLARATION),
+        ("belgeler", archive.Kind.DOCUMENT),
+    ],
+)
+def test_numbered_category_folders_classify(folder, kind):
+    """The ordering prefix is for Explorer; it must not change the handler."""
+    assert archive.classify_folder(folder) == kind
+
+
+@pytest.mark.parametrize(
+    ("folder", "direction"),
+    [
+        ("1_Gelir_Faturalari", clients.SALE),
+        ("2_Gider_Faturalari", clients.PURCHASE),
+        ("Satis Faturalari", clients.SALE),
+        ("Alis Faturalari", clients.PURCHASE),
+        ("faturalar", None),          # says nothing; fall back to the tax-id comparison
+        ("5_Banka_Ekstreleri", None),
+    ],
+)
+def test_folder_states_the_invoice_direction(folder, direction):
+    assert archive.direction_for_folder(folder) == direction
+
+
+@pytest.mark.parametrize(
+    ("folder", "tax_id", "title"),
+    [
+        ("45678912345 - Canan Aydın E-Ticaret", "45678912345", "Canan Aydın E-Ticaret"),
+        ("5556667778 - Kaya Yapı Ltd. Şti.", "5556667778", "Kaya Yapı Ltd. Şti."),
+        ("[1020304050 - Zirve Lojistik]", "1020304050", "Zirve Lojistik"),
+        ("1020304050_Zirve Lojistik", "1020304050", "Zirve Lojistik"),
+        ("mehmet", None, None),        # no convention: still a valid client folder
+        ("2026 - Bir Sey", None, None),  # 4 digits is not a tax number
+    ],
+)
+def test_client_folder_carries_the_tax_number(folder, tax_id, title):
+    parsed = archive.parse_client_folder(folder)
+    assert (parsed.tax_id, parsed.title) == (tax_id, title)
+
+
+def test_ingest_fills_the_tax_id_from_the_folder_name(tmp_path):
+    """This is what makes Toplam Gelir work: without a tax_id every invoice would be
+    classed as a purchase."""
+    conn = db.connect(tmp_path / "conv.db")
+    client = clients.resolve_folder(conn, "45678912345 - Canan Aydın E-Ticaret")
+    assert client.tax_id == "45678912345"
+    assert client.display == "Canan Aydın E-Ticaret"
+    conn.close()
+
+
+def test_a_renamed_folder_does_not_fork_the_client(tmp_path):
+    """The ünvan gets corrected; the tax number does not. Matching on it keeps one
+    client instead of silently creating a second."""
+    conn = db.connect(tmp_path / "rename.db")
+    first = clients.resolve_folder(conn, "45678912345 - Canan Aydin E-Ticaret")
+    second = clients.resolve_folder(conn, "45678912345 - Canan Aydın E-Ticaret ve Danışmanlık")
+    assert first.id == second.id
+    assert len(clients.all_clients(conn)) == 1
+    conn.close()
+
+
+def test_an_operator_edit_survives_the_next_ingest(tmp_path):
+    conn = db.connect(tmp_path / "edit.db")
+    client = clients.resolve_folder(conn, "45678912345 - Eski Unvan")
+    clients.set_metadata(conn, client.id, display="Elle Düzeltilmiş Ünvan")
+    again = clients.resolve_folder(conn, "45678912345 - Eski Unvan")
+    assert again.display == "Elle Düzeltilmiş Ünvan"
+    conn.close()
+
+
+def test_bank_statements_are_collected_even_though_they_are_not_pdfs(tmp_path):
+    """Banks export .xlsx/.csv. PDF-only collection dropped them silently."""
+    month = tmp_path / "111 - X" / "2026" / "01_Ocak"
+    (month / "5_Banka_Ekstreleri").mkdir(parents=True)
+    (month / "5_Banka_Ekstreleri" / "ocak.csv").write_text("a;b")
+    (month / "5_Banka_Ekstreleri" / "ocak.xlsx").write_bytes(b"PK\x03\x04")
+
+    found = {i.path.name for i in archive.walk(tmp_path).items}
+    assert found == {"ocak.csv", "ocak.xlsx"}
+
+
+def test_a_spreadsheet_in_an_invoice_folder_is_reported_not_parsed(tmp_path):
+    """Invoices go through text extraction, so a non-PDF there is a filing mistake --
+    say so rather than letting the PDF reader raise mid-run."""
+    month = tmp_path / "111 - X" / "2026" / "01_Ocak"
+    (month / "1_Gelir_Faturalari").mkdir(parents=True)
+    (month / "1_Gelir_Faturalari" / "liste.xlsx").write_bytes(b"PK\x03\x04")
+
+    result = archive.walk(tmp_path)
+    assert result.items == []
+    assert any("PDF değil" in p.reason for p in result.problems)
+
+
+def test_walk_records_the_direction_off_the_category_folder(tmp_path):
+    month = tmp_path / "45678912345 - X" / "2026" / "01_Ocak"
+    for folder in ("1_Gelir_Faturalari", "2_Gider_Faturalari"):
+        (month / folder).mkdir(parents=True)
+        (month / folder / "a.pdf").write_bytes(b"%PDF-1.4")
+
+    by_folder = {i.doc_type: i.direction for i in archive.walk(tmp_path).items}
+    assert by_folder["1_Gelir_Faturalari"] == clients.SALE
+    assert by_folder["2_Gider_Faturalari"] == clients.PURCHASE
+
+
+def test_pretty_folder_strips_the_ordering_prefix():
+    assert archive.pretty_folder("1_Gelir_Faturalari") == "Gelir Faturalari"
+    assert archive.pretty_folder("5_Banka_Ekstreleri") == "Banka Ekstreleri"
+    assert archive.pretty_folder("belgeler") == "belgeler"

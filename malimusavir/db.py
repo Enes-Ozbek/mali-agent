@@ -55,6 +55,8 @@ _INVOICE_COLUMNS = (
     ("direction", "TEXT"),
     # The archive gained an optional <month>/ level between year and document type.
     ("doc_month", "INTEGER"),
+    # Which category folder the invoice was filed in ("1_Gelir_Faturalari").
+    ("doc_type", "TEXT"),
 )
 
 #: Added when tahakkuk extraction replaced "store the PDF unparsed".
@@ -67,6 +69,7 @@ _DECLARATION_COLUMNS = (
     ("taxpayer_tax_id", "TEXT"),
     ("lines", "TEXT"),
     ("doc_month", "INTEGER"),
+    ("doc_type", "TEXT"),
 )
 
 #: documents/ predates the month level too.
@@ -150,6 +153,7 @@ def _to_payload(invoice: ExtractedInvoice) -> dict[str, Any]:
         client_id=invoice.client_id,
         doc_year=invoice.doc_year,
         doc_month=invoice.doc_month,
+        doc_type=invoice.doc_type,
         direction=invoice.direction,
         raw_text=invoice.raw_text,
         source_path=invoice.source_path,

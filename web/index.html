@@ -209,6 +209,22 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 <div style="display:grid;grid-template-columns:74px minmax(0,1fr) 96px 84px 84px 58px 30px;padding:5px 14px;border-bottom:1px solid var(--color-divider);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:color-mix(in srgb, var(--color-text) 60%, transparent);flex:none">
 <span>Tarih</span><span>Satıcı</span><span>Kategori</span><span style="text-align:right">KDV</span><span style="text-align:right">Toplam</span><span style="text-align:right">Durum</span><span style="text-align:right">Dosya</span>
 </div>
+<sc-if value="{{ hasDocs }}" hint-placeholder-val="{{ false }}">
+<div style="padding:9px 14px 4px;flex:none">
+<div style="display:flex;align-items:baseline;gap:9px">
+<h4 style="margin:0">Belgeler</h4>
+<span style="font-size:10.5px;opacity:.55">{{ docsNote }}</span>
+</div>
+</div>
+<sc-for list="{{ docRows }}" as="d" hint-placeholder-count="3">
+<div class="krow crow" style="display:flex;align-items:center;gap:10px;padding:5px 14px;border-bottom:1px solid var(--color-divider);font-size:11.5px;background:{{ d.rowBg }}" onClick="{{ d.select }}" title="{{ d.path }}">
+<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ d.filename }}</span>
+<span style="font-size:10px;opacity:.5">{{ d.docType }}</span>
+<button class="link {{ d.fileClass }}" style="font-size:12px;flex:none" onClick="{{ d.view }}" title="{{ d.fileTitle }}">{{ d.fileIcon }}</button>
+</div>
+</sc-for>
+</sc-if>
+
 <sc-for list="{{ ledger }}" as="i" hint-placeholder-count="10">
 <div class="krow crow" style="display:grid;grid-template-columns:74px minmax(0,1fr) 96px 84px 84px 58px 30px;align-items:center;padding:3.5px 14px;border-bottom:1px solid var(--color-divider);font-size:11.5px;background:{{ i.rowBg }}" onClick="{{ i.select }}" title="{{ i.path }}">
 <span class="num" style="opacity:.65">{{ i.dateTr }}</span>
@@ -380,6 +396,10 @@ class Component extends DCLogic {
       v.split(' ').slice(0, 3).join(' ');
   }
   trDate(iso) { return iso ? iso.split('-').reverse().join('.') : '—'; }
+  /** "1_Gelir_Faturalari" -> "Gelir Faturalari". Mirrors archive.pretty_folder. */
+  prettyFolder(name) {
+    return (name || '').replace(/^\d+\s*[._\-)]+\s*/, '').replace(/_/g, ' ').trim() || name;
+  }
 
   // The transcript is replayed to /api/chat as `messages` on every turn, so it resets
   // whenever the scope changes. Carrying turns from one client into another scope would
@@ -409,15 +429,26 @@ class Component extends DCLogic {
   // confidentiality boundary, not a display filter -- but sending it consistently is
   // what keeps the two in agreement.
   scoped(path) {
-    const { clientId: id, year, month } = this.state;
+    const { clientId: id, year, month, docType } = this.state;
     const parts = [];
     if (id !== null) parts.push(`client=${encodeURIComponent(id)}`);
     if (year) parts.push(`year=${year}`);
     // month is only meaningful inside a year; sending it alone would filter across
     // every year's January at once, which is never what the tree selection means.
     if (year && month) parts.push(`month=${month}`);
+    if (year && month && docType) parts.push(`doc_type=${encodeURIComponent(docType)}`);
     if (!parts.length) return path;
     return path + (path.includes('?') ? '&' : '?') + parts.join('&');
+  }
+
+  /** Query string for the per-client sub-resources, which take no `client=`. */
+  subScope() {
+    const { year, month, docType } = this.state;
+    const parts = [];
+    if (year) parts.push(`year=${year}`);
+    if (year && month) parts.push(`month=${month}`);
+    if (year && month && docType) parts.push(`doc_type=${encodeURIComponent(docType)}`);
+    return parts.length ? '?' + parts.join('&') : '';
   }
 
   async openClient(client) {
@@ -459,10 +490,7 @@ class Component extends DCLogic {
       ]);
       let tahakkuklar = [], docs = [];
       if (this.state.clientId !== null && this.state.clientId >= 0) {
-        const parts = [];
-        if (this.state.year) parts.push(`year=${this.state.year}`);
-        if (this.state.year && this.state.month) parts.push(`month=${this.state.month}`);
-        const sub = parts.length ? '?' + parts.join('&') : '';
+        const sub = this.subScope();
         [tahakkuklar, docs] = await Promise.all([
           fetch(`/api/clients/${this.state.clientId}/declarations${sub}`).then(r => r.json()).catch(() => []),
           fetch(`/api/clients/${this.state.clientId}/documents${sub}`).then(r => r.json()).catch(() => [])
@@ -676,7 +704,7 @@ class Component extends DCLogic {
               const catActive = st.year === y.year && st.month === m.month
                 && st.docType === c.doc_type;
               return {
-                label: c.doc_type, count: c.count,
+                label: c.label || c.doc_type, count: c.count,
                 weight: catActive ? '600' : '400',
                 color: catActive ? acc : 'inherit',
                 dot: c.kind === 'invoice' ? 'var(--color-accent-600)'
@@ -717,7 +745,7 @@ class Component extends DCLogic {
     // actually assessed. A gap is a finding, not a rounding artefact, so it is stated
     // rather than smoothed over.
     let vatWarning = '';
-    if (vat.no_sales_recorded && (vat.purchase_count || 0) > 0) {
+    if (vat.no_sales_recorded && vat.tax_id_missing && (vat.purchase_count || 0) > 0) {
       vatWarning = 'Hiçbir fatura satış olarak işaretlenmemiş; gelir 0,00 TL görünüyor. '
         + 'Bu genelde müşterinin VKN/TCKN bilgisinin eksik olmasından kaynaklanır — '
         + 'VKN girilene kadar tüm faturalar alış sayılır.';
@@ -743,6 +771,20 @@ class Component extends DCLogic {
         ? 'color-mix(in srgb, var(--color-accent) 12%, transparent)' : 'transparent',
       select: this.selectRow('invoices', i, this.shortVendor(i.vendor) || i.invoice_no),
       view: this.selectRow('invoices', i, this.shortVendor(i.vendor) || i.invoice_no)
+    }));
+
+    // Bank statements, licences, contracts -- stored and openable, never parsed.
+    const docRows = st.docs.map(d => ({
+      filename: d.filename,
+      docType: this.prettyFolder(d.doc_type),
+      path: d.source_path || 'dosya yolu kayıtlı değil',
+      fileIcon: d.file_exists ? '✓' : '⚠',
+      fileClass: d.file_exists ? 'ok' : 'missing',
+      fileTitle: d.file_exists ? 'Görüntüle' : 'Dosya diskte bulunamadı',
+      rowBg: sel && sel.kind === 'documents' && sel.id === d.id
+        ? 'color-mix(in srgb, var(--color-accent) 12%, transparent)' : 'transparent',
+      select: this.selectRow('documents', d, d.filename),
+      view: this.selectRow('documents', d, d.filename)
     }));
 
     const tahakkuklar = st.tahakkuklar.map(t => ({
@@ -843,8 +885,9 @@ class Component extends DCLogic {
     // What the user has selected in the tree, in words -- used for the panel subtitle
     // and to build the assistant's suggested prompts.
     const monthName = st.month ? this.MONTHS[st.month - 1] : null;
+    const catName = st.docType ? this.prettyFolder(st.docType) : null;
     const periodLabel = !st.year ? 'tüm dönemler'
-      : monthName ? `${monthName} ${st.year}${st.docType ? ' · ' + st.docType : ''}`
+      : monthName ? `${monthName} ${st.year}${catName ? ' · ' + catName : ''}`
       : String(st.year);
 
     const chat = st.chat.map(m => ({
@@ -929,6 +972,8 @@ class Component extends DCLogic {
       folders, noFolders: folders.length === 0,
       fileRows, fileListNote, backToFolders: this.backToFolders,
       fileStatus: st.fileStatus, hasFileStatus: !!st.fileStatus,
+      docRows, hasDocs: docRows.length > 0,
+      docsNote: `${docRows.length} belge`,
       ledgerNote: st.loading ? 'Yükleniyor…'
         : `${ledger.length} fatura · ${periodLabel}`,
 

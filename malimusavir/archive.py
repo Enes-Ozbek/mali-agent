@@ -26,15 +26,45 @@ from typing import Iterator
 
 from .normalize import fold_tr
 
-#: Folder-name prefixes that select a handler. Matched on fold_tr output, so "Faturalar",
-#: "faturalar" and "FATURALAR" are the same thing.
+#: Words that select a handler, matched anywhere in the folded folder name. Substring
+#: rather than prefix, because the standard layout numbers its folders for ordering:
+#: "1_Gelir_Faturalari" has to reach the invoice pipeline the same as "Faturalar".
 INVOICE_FOLDERS = ("fatura",)
-#: Tahakkuk fişi -- the tax office's accrual receipt, and the document that actually
-#: states what is owed. "beyanname" is kept as an alias because practices file the two
-#: together and the extractor recognises the receipt by its own heading either way.
+#: The tax office's accrual receipt (tahakkuk fişi) states what is owed and is parsed by
+#: tahakkuk.py. "beyanname" is the filed declaration itself -- a different document with
+#: its own layout -- but both live in the declarations table, and the extractor
+#: recognises the receipt by its own heading, so a beyanname is stored and flagged
+#: rather than silently read as a receipt.
 DECLARATION_FOLDERS = ("tahakkuk", "beyanname", "beyan")
+#: Bank statements: stored and listed, never parsed. They arrive as Excel as often as
+#: PDF, which is why _files() below cannot be PDF-only for document folders.
+BANK_FOLDERS = ("banka", "ekstre", "hesap hareket")
+
+#: Folder words that state the direction of the invoices inside them. The standard
+#: layout separates sales from purchases by folder, which is a far better signal than
+#: comparing tax ids: it is stated by whoever filed the document, works before any
+#: VKN is on file, and is right even when the seller's tax id fails to extract.
+SALE_FOLDERS = ("gelir", "satis", "kesilen")
+PURCHASE_FOLDERS = ("gider", "alis", "masraf", "gelen")
+
+#: "1_", "01-", "3. " -- ordering prefixes that exist to sort folders in Explorer and
+#: say nothing about what is inside them.
+_ORDER_PREFIX = re.compile(r"^\d+\s*[._\-)]+\s*")
 
 _YEAR = re.compile(r"^(19|20)\d{2}$")
+
+#: "45678912345 - Canan Aydın E-Ticaret", optionally wrapped in brackets. The client
+#: folder carries the taxpayer's own VKN/TCKN, which is what makes sales/purchase
+#: direction and the "is this receipt really theirs" cross-check work without anyone
+#: typing the number into the UI.
+_CLIENT_FOLDER = re.compile(
+    r"^[\[\(]?\s*(\d{10,11})\s*[-–—_]+\s*(.+?)\s*[\]\)]?$"
+)
+
+#: Documents that are stored but never parsed may be spreadsheets; anything that goes
+#: through text extraction must be a PDF.
+PARSEABLE_SUFFIXES = (".pdf",)
+STORED_SUFFIXES = (".pdf", ".xlsx", ".xls", ".xlsm", ".csv")
 
 #: Turkish month folder names, folded. Index + 1 is the month number.
 MONTH_NAMES = ("ocak", "subat", "mart", "nisan", "mayis", "haziran",
@@ -57,6 +87,57 @@ class Kind:
 
 
 @dataclass(frozen=True)
+class ClientFolder:
+    """What a client folder's name says about the taxpayer."""
+
+    name: str                    #: the folder name, verbatim -- still the identity
+    tax_id: str | None = None    #: VKN (10) or TCKN (11) parsed out of the name
+    title: str | None = None     #: the ünvan after the dash
+
+
+def parse_client_folder(name: str) -> ClientFolder:
+    """Split "45678912345 - Canan Aydın E-Ticaret" into its parts.
+
+    A folder that does not follow the convention is not an error -- it simply yields no
+    tax id, and the client keeps working exactly as before.
+    """
+    match = _CLIENT_FOLDER.match(name.strip())
+    if not match:
+        return ClientFolder(name=name)
+    return ClientFolder(name=name, tax_id=match.group(1), title=match.group(2).strip())
+
+
+def folder_key(name: str) -> str:
+    """A folder name reduced to the words that classify it.
+
+    Strips the ordering prefix so "1_Gelir_Faturalari" and "Gelir Faturaları" are the
+    same thing, and normalises separators so substring matching works on either.
+    """
+    folded = fold_tr(name)
+    stripped = _ORDER_PREFIX.sub("", folded)
+    return stripped.replace("_", " ").replace("-", " ").strip()
+
+
+def pretty_folder(name: str) -> str:
+    """The folder name as a human should read it: "1_Gelir_Faturalari" -> "Gelir
+    Faturalari". Display only -- the verbatim name stays the identity."""
+    cleaned = _ORDER_PREFIX.sub("", name.strip())
+    return cleaned.replace("_", " ").strip() or name
+
+
+def direction_for_folder(name: str) -> str | None:
+    """"satis" / "alis" when the folder says so, else None."""
+    from .clients import PURCHASE, SALE
+
+    key = folder_key(name)
+    if any(word in key for word in SALE_FOLDERS):
+        return SALE
+    if any(word in key for word in PURCHASE_FOLDERS):
+        return PURCHASE
+    return None
+
+
+@dataclass(frozen=True)
 class ArchiveItem:
     """One PDF, with everything its path says about it."""
 
@@ -67,6 +148,9 @@ class ArchiveItem:
     kind: str              #: Kind.*
     month: int | None = None       #: 1-12 from the folder, None when not filed by month
     month_folder: str | None = None  #: the folder name, verbatim
+    #: "satis"/"alis" when the document-type folder says so ("1_Gelir_Faturalari"),
+    #: else None and the tax-id comparison decides.
+    direction: str | None = None
 
 
 @dataclass
@@ -89,10 +173,15 @@ class WalkResult:
 
 def classify_folder(name: str) -> str:
     """Which handler a document-type folder maps to."""
-    folded = fold_tr(name)
-    if any(folded.startswith(p) for p in INVOICE_FOLDERS):
+    key = folder_key(name)
+    # Bank statements first: "5_Banka_Ekstreleri" contains no invoice word today, but
+    # checking it ahead of the others keeps a folder like "Banka Fatura Ödemeleri" out
+    # of the invoice pipeline, where every row would fail extraction.
+    if any(word in key for word in BANK_FOLDERS):
+        return Kind.DOCUMENT
+    if any(word in key for word in INVOICE_FOLDERS):
         return Kind.INVOICE
-    if any(folded.startswith(p) for p in DECLARATION_FOLDERS):
+    if any(word in key for word in DECLARATION_FOLDERS):
         return Kind.DECLARATION
     return Kind.DOCUMENT
 
@@ -130,10 +219,11 @@ def parse_month(name: str) -> int | None:
     return None
 
 
-def _pdfs(folder: Path) -> Iterator[Path]:
-    """PDFs under a document-type folder, at any depth below it."""
+def _files(folder: Path, suffixes: tuple[str, ...]) -> Iterator[Path]:
+    """Matching files under a document-type folder, at any depth below it."""
     yield from sorted(
-        (p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() == ".pdf"),
+        (p for p in folder.rglob("*")
+         if p.is_file() and p.suffix.lower() in suffixes),
         key=lambda p: str(p).lower(),
     )
 
@@ -207,10 +297,26 @@ def walk(root: str | Path, *, only_client: str | None = None) -> WalkResult:
 
 def _collect(result: WalkResult, type_dir: Path, client: str, year: int,
              month: int | None, month_folder: str | None) -> None:
-    """Record every PDF under one document-type folder."""
+    """Record every usable file under one document-type folder."""
     kind = classify_folder(type_dir.name)
-    for pdf in _pdfs(type_dir):
+    direction = direction_for_folder(type_dir.name)
+
+    # Invoices and declarations go through text extraction, so they have to be PDFs.
+    # Everything else is stored and listed, never read, so a bank statement may just as
+    # well be the .xlsx the bank actually exports.
+    parseable = kind in (Kind.INVOICE, Kind.DECLARATION)
+    wanted = PARSEABLE_SUFFIXES if parseable else STORED_SUFFIXES
+
+    for path in _files(type_dir, wanted):
         result.items.append(ArchiveItem(
-            path=pdf, client=client, year=year, doc_type=type_dir.name, kind=kind,
-            month=month, month_folder=month_folder,
+            path=path, client=client, year=year, doc_type=type_dir.name, kind=kind,
+            month=month, month_folder=month_folder, direction=direction,
         ))
+
+    if parseable:
+        # A spreadsheet in an invoice folder cannot be extracted. Report it rather than
+        # letting pdfplumber raise halfway through the run.
+        for other in _files(type_dir, tuple(s for s in STORED_SUFFIXES
+                                            if s not in PARSEABLE_SUFFIXES)):
+            result.problems.append(ArchiveProblem(
+                str(other), "PDF değil — bu klasördeki belgeler okunamaz, atlandı"))

@@ -71,6 +71,40 @@ def resolve(conn: sqlite3.Connection, name: str) -> Client:
     return _row_to_client(row)
 
 
+def resolve_folder(conn: sqlite3.Connection, folder_name: str) -> Client:
+    """Get-or-create a client from an archive folder name.
+
+    The standard layout names the folder "<VKN/TCKN> - <Ünvan>". When it does, the tax
+    id is the identity: matching on it first means correcting a typo in the ünvan --
+    or the practice simply renaming the folder -- does not fork one client into two,
+    which plain name matching would do.
+
+    The parsed tax id and title are filled in on first sight and never overwrite values
+    already on file, so an operator's edit in the UI survives the next ingest.
+    """
+    from .archive import parse_client_folder
+
+    parsed = parse_client_folder(folder_name)
+    if not parsed.tax_id:
+        return resolve(conn, folder_name)
+
+    row = conn.execute("SELECT * FROM clients WHERE tax_id = ?", (parsed.tax_id,)).fetchone()
+    if row is None:
+        client = resolve(conn, folder_name)
+        return set_metadata(conn, client.id, tax_id=parsed.tax_id,
+                            display=parsed.title) or client
+
+    client = _row_to_client(row)
+    updates = {}
+    if client.name != folder_name:
+        # The folder was renamed; follow it, since the folder is what the operator sees.
+        conn.execute("UPDATE clients SET name = ? WHERE id = ?", (folder_name, client.id))
+        conn.commit()
+    if not client.display and parsed.title:
+        updates["display"] = parsed.title
+    return set_metadata(conn, client.id, **updates) if updates else get(conn, client.id)
+
+
 def get(conn: sqlite3.Connection, client_id: int) -> Client | None:
     row = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     return _row_to_client(row) if row else None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -163,7 +164,7 @@ def ingest_archive(
     )
 
     for item in walked.items:
-        client = clients_mod.resolve(conn, item.client)
+        client = clients_mod.resolve_folder(conn, item.client)
         try:
             if item.kind == archive.Kind.INVOICE:
                 _ingest_invoice(conn, item, client, report, use_llm=use_llm)
@@ -191,7 +192,13 @@ def _ingest_invoice(conn, item, client, report: ArchiveReport, *, use_llm: bool)
     invoice.client_id = client.id
     invoice.doc_year = item.year
     invoice.doc_month = item.month
-    invoice.direction = clients_mod.direction_for(client, invoice.vendor_tax_id)
+    invoice.doc_type = item.doc_type
+    # The folder wins when it states the direction. Whoever filed the document knew
+    # which side of the ledger it belonged on; the tax-id comparison is a fallback that
+    # silently calls everything a purchase whenever the client's own VKN is missing or
+    # the seller's failed to extract.
+    invoice.direction = item.direction or clients_mod.direction_for(
+        client, invoice.vendor_tax_id)
 
     # The invoice's own date rules every calculation; the folder only says where it was
     # filed. A mismatch is a filing error worth surfacing, not something to silently
@@ -221,12 +228,21 @@ def _record_declaration(conn, item, client) -> int:
     its stated total keeps needs_review set rather than presenting a figure that might
     be wrong.
     """
-    from . import tahakkuk as tahakkuk_mod
+    from . import archive as archive_mod, tahakkuk as tahakkuk_mod
 
     doc = load_pdf(item.path)
     parsed = tahakkuk_mod.parse(doc.text)
 
     reasons = list(parsed.review_reasons)
+
+    # 3_Beyannameler and 4_Tahakkuklar are two different documents of the same event.
+    # Only the accrual receipt has an extractor; a beyanname is a GİB system output
+    # with its own layout, and no real sample has been checked against yet. Reporting
+    # it as a malformed receipt ("missing:total") would read as an extraction bug
+    # rather than what it is -- a document type this tool does not parse. Stored and
+    # listed so it can be opened, and flagged so nothing downstream treats it as data.
+    if "tahakkuk" not in archive_mod.folder_key(item.doc_type) and parsed.needs_review:
+        reasons = ["beyanname:not_parsed"]
     # The receipt names its taxpayer. If that VKN is on file for this client and does not
     # match, the document is filed under the wrong client -- worth surfacing loudly.
     if (parsed.taxpayer_tax_id and client.tax_id
@@ -251,18 +267,28 @@ def _record_declaration(conn, item, client) -> int:
         conn,
         "INSERT OR IGNORE INTO declarations "
         "(client_id, kind, period, accrued, offset_amount, payable, due_date, "
-        " issue_date, receipt_no, taxpayer_tax_id, lines, doc_year, doc_month, "
+        " issue_date, receipt_no, taxpayer_tax_id, lines, doc_year, doc_month, doc_type, "
         " source_path, content_hash, raw_text, needs_review, review_reasons, ingested_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (client.id, parsed.kind, parsed.period, accrued, offset, parsed.total_payable,
          parsed.due_date, parsed.issue_date, parsed.receipt_no, parsed.taxpayer_tax_id,
-         lines, item.year, item.month, str(item.path), doc.content_hash, doc.text,
+         lines, item.year, item.month, item.doc_type, str(item.path), doc.content_hash, doc.text,
          int(bool(reasons)), json.dumps(reasons, ensure_ascii=False), _now()),
     )
 
 
 def _record_document(conn, item, client) -> int:
-    doc = load_pdf(item.path)
+    """Store a document that is listed but never read.
+
+    Bank statements arrive as .xlsx or .csv, so this cannot assume a PDF. Non-PDFs are
+    hashed from their bytes and no text is extracted -- there is no parser for them and
+    inventing one would be worse than leaving the file to be opened by hand.
+    """
+    if item.path.suffix.lower() == ".pdf":
+        content_hash = load_pdf(item.path).content_hash
+    else:
+        content_hash = hashlib.sha256(item.path.read_bytes()).hexdigest()
+
     return _insert_ignore(
         conn,
         "INSERT OR IGNORE INTO documents "
@@ -270,7 +296,7 @@ def _record_document(conn, item, client) -> int:
         " content_hash, ingested_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (client.id, item.doc_type, item.year, item.month, item.path.name,
-         str(item.path), doc.content_hash, _now()),
+         str(item.path), content_hash, _now()),
     )
 
 

@@ -28,7 +28,8 @@ from .clients import PURCHASE, SALE  # noqa: E402
 
 
 def load_frame(conn: sqlite3.Connection, client_id: int | str | None = None,
-               year: int | None = None, month: int | None = None) -> pd.DataFrame:
+               year: int | None = None, month: int | None = None,
+               doc_type: str | None = None) -> pd.DataFrame:
     """All invoices as a DataFrame, with dates parsed and amounts numeric.
 
     ``client_id`` scopes to one client (``UNASSIGNED`` for the pre-client rows, None for
@@ -51,11 +52,14 @@ def load_frame(conn: sqlite3.Connection, client_id: int | str | None = None,
         # that is how a filing error becomes visible instead of silently moving.
         where.append("doc_month = ?")
         params.append(int(month))
+    if doc_type is not None:
+        where.append("doc_type = ?")
+        params.append(doc_type)
 
     frame = pd.read_sql_query(
         "SELECT id, invoice_no, date, vendor, vendor_tax_id, total_amount, tax_amount, "
         "net_amount, category, currency, payment_method, needs_review, client_id, "
-        "doc_year, doc_month, direction, source_path FROM invoices"
+        "doc_year, doc_month, doc_type, direction, source_path FROM invoices"
         + (" WHERE " + " AND ".join(where) if where else ""),
         conn,
         params=params,

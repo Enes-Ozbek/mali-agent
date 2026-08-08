@@ -818,3 +818,111 @@ def test_file_exists_turns_false_when_the_file_is_removed(vat_client, tmp_path):
     rows = {r["invoice_no"]: r for r in
             client.get(f"/api/invoices?client={cid}&year=2026&month=1").json()}
     assert rows["S1"]["file_exists"] is False
+
+
+# --- selecting a category folder narrows the dashboard --------------------------------
+
+
+@pytest.fixture
+def foldered(tmp_path, monkeypatch):
+    """One month laid out the way the practice files it."""
+    from malimusavir import clients
+
+    db_path = tmp_path / "folders.db"
+    monkeypatch.setattr(api, "DB_PATH", db_path)
+    conn = db.connect(db_path)
+    who = clients.resolve_folder(conn, "5556667778 - Kaya Yapı Ltd. Şti")
+
+    def add(no, folder, direction, net, tax):
+        invoice = ExtractedInvoice(
+            invoice_no=no, date="2026-01-10", vendor="V", vendor_tax_id="9",
+            total_amount=net + tax, tax_amount=tax, net_amount=net, category="hizmet",
+            currency="TL", content_hash=f"h-{no}", profile="test",
+        )
+        invoice.client_id, invoice.doc_year, invoice.doc_month = who.id, 2026, 1
+        invoice.doc_type, invoice.direction = folder, direction
+        db.upsert_invoice(conn, invoice)
+
+    add("SAT1", "1_Gelir_Faturalari", "satis", 10000.0, 2000.0)
+    add("ALS1", "2_Gider_Faturalari", "alis", 4000.0, 800.0)
+    conn.execute(
+        "INSERT INTO documents (client_id, doc_type, doc_year, doc_month, filename, "
+        "source_path, content_hash, ingested_at) VALUES (?, '5_Banka_Ekstreleri', 2026, "
+        "1, 'ocak.csv', 'C:/a/ocak.csv', 'h', '2026-02-01T00:00:00')", (who.id,))
+    conn.commit()
+    conn.close()
+    return TestClient(api.app), who.id
+
+
+def test_selecting_a_category_narrows_the_invoice_list(foldered):
+    client, cid = foldered
+    base = f"/api/invoices?client={cid}&year=2026&month=1"
+    assert len(client.get(base).json()) == 2
+    gelir = client.get(base + "&doc_type=1_Gelir_Faturalari").json()
+    assert [r["invoice_no"] for r in gelir] == ["SAT1"]
+    gider = client.get(base + "&doc_type=2_Gider_Faturalari").json()
+    assert [r["invoice_no"] for r in gider] == ["ALS1"]
+
+
+def test_selecting_a_category_narrows_the_vat_summary(foldered):
+    """The centre panel must follow the tree, not just the invoice table."""
+    client, cid = foldered
+    base = f"/api/vat-summary?client={cid}&year=2026&month=1"
+    both = client.get(base).json()
+    assert (both["income"], both["expense"]) == (10000.0, 4000.0)
+
+    gelir = client.get(base + "&doc_type=1_Gelir_Faturalari").json()
+    assert gelir["income"] == pytest.approx(10000.0)
+    assert gelir["expense"] == pytest.approx(0.0)
+
+
+def test_selecting_a_document_category_yields_no_invoices(foldered):
+    """5_Banka_Ekstreleri holds no invoices; the ledger must empty rather than keep
+    showing the month's rows underneath a bank-statement heading."""
+    client, cid = foldered
+    rows = client.get(
+        f"/api/invoices?client={cid}&year=2026&month=1&doc_type=5_Banka_Ekstreleri").json()
+    assert rows == []
+    docs = client.get(
+        f"/api/clients/{cid}/documents?year=2026&month=1&doc_type=5_Banka_Ekstreleri").json()
+    assert [d["filename"] for d in docs] == ["ocak.csv"]
+
+
+def test_no_sales_is_not_warned_about_when_the_vkn_is_known(foldered):
+    """A client that only bought this month is normal. The "no sales" warning exists
+    for a missing VKN, which makes every invoice look like a purchase -- firing it when
+    the tax id is on file would train the user to ignore it."""
+    client, cid = foldered
+    body = client.get(f"/api/vat-summary?client={cid}&year=2026&month=1"
+                      "&doc_type=2_Gider_Faturalari").json()
+    assert body["no_sales_recorded"] is True
+    assert body["tax_id_missing"] is False
+
+
+def test_a_missing_vkn_is_still_reported(tmp_path, monkeypatch):
+    from malimusavir import clients
+
+    db_path = tmp_path / "novkn.db"
+    monkeypatch.setattr(api, "DB_PATH", db_path)
+    conn = db.connect(db_path)
+    who = clients.resolve(conn, "mehmet")          # plain folder, no tax number
+    invoice = ExtractedInvoice(
+        invoice_no="X1", date="2026-01-05", vendor="V", vendor_tax_id="9",
+        total_amount=120.0, tax_amount=20.0, net_amount=100.0, category="hizmet",
+        currency="TL", content_hash="h", profile="test",
+    )
+    invoice.client_id, invoice.doc_year, invoice.direction = who.id, 2026, "alis"
+    db.upsert_invoice(conn, invoice)
+    conn.close()
+
+    body = TestClient(api.app).get(f"/api/vat-summary?client={who.id}").json()
+    assert body["no_sales_recorded"] is True
+    assert body["tax_id_missing"] is True
+
+
+def test_the_tree_labels_strip_the_ordering_prefix(foldered):
+    client, cid = foldered
+    cats = client.get(f"/api/clients/{cid}/tree").json()[0]["months"][0]["categories"]
+    by_type = {c["doc_type"]: c["label"] for c in cats}
+    assert by_type["1_Gelir_Faturalari"] == "Gelir Faturalari"
+    assert by_type["5_Banka_Ekstreleri"] == "Banka Ekstreleri"

@@ -70,6 +70,8 @@ class ExtractedInvoice:
     #: authoritative for every calculation; this only records where it was filed, so a
     #: mismatch can be flagged as a filing error.
     doc_year: int | None = None
+    #: The category folder this was filed in, verbatim ("1_Gelir_Faturalari").
+    doc_type: str | None = None
     #: The archive month folder (1-12), or None when the archive has no month level.
     #: Never back-filled from `date`: the point of the field is to say where the file
     #: actually sits, so that a mismatch with the invoice's own date is visible.
