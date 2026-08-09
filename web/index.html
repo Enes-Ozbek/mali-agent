@@ -35,6 +35,13 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 .krow:hover{background:color-mix(in srgb, var(--color-text) 4%, transparent)}
 .crow{cursor:pointer}
 .crow:hover{background:color-mix(in srgb, var(--color-accent) 8%, transparent)}
+/* Gündem: the practice at a glance, above the client list. */
+.agenda{padding:9px 11px;background:var(--color-surface);border-radius:5px}
+.agendalabel{font-size:9px;letter-spacing:.08em;text-transform:uppercase;opacity:.6}
+.agendabig{font-family:var(--font-heading);font-size:21px;line-height:1.15;margin-top:2px}
+.agendanote{font-size:10px;opacity:.55;line-height:1.35;margin-top:1px}
+.pill{flex:none;font-size:9px;letter-spacing:.04em;text-transform:uppercase;
+      padding:1px 6px;border-radius:9px;white-space:nowrap}
 .tnode{cursor:pointer;user-select:none}
 .tnode:hover{background:color-mix(in srgb, var(--color-accent) 10%, transparent)}
 .ok{color:var(--color-accent-700)}
@@ -99,18 +106,71 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 
 <sc-if value="{{ isList }}" hint-placeholder-val="{{ true }}">
 <div class="scroll" style="height:100%;overflow:auto;padding:18px 22px">
-<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
+
+<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:11px">
+<h4 style="margin:0">Gündem</h4>
+<span class="num" style="font-size:11.5px;opacity:.55">{{ agendaNote }}</span>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:9px">
+<sc-for list="{{ agendaCards }}" as="a" hint-placeholder-count="3">
+<div class="agenda" style="border-left:3px solid {{ a.accent }}">
+<div class="agendalabel">{{ a.label }}</div>
+<div class="num agendabig" style="color:{{ a.accent }}">{{ a.value }}</div>
+<div class="agendanote">{{ a.note }}</div>
+</div>
+</sc-for>
+</div>
+
+<sc-if value="{{ hasDeadlines }}" hint-placeholder-val="{{ true }}">
+<div style="display:flex;align-items:baseline;gap:9px;margin:16px 0 5px">
+<h4 style="margin:0;font-size:12.5px">Yaklaşan ve geçmiş vadeler</h4>
+<span style="font-size:10.5px;opacity:.5">tahakkuk fişindeki vade</span>
+</div>
+<div style="display:grid;grid-template-columns:78px minmax(150px,1.4fr) 84px 78px 104px;padding:5px 10px;border-bottom:1px solid var(--color-text);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:color-mix(in srgb, var(--color-text) 60%, transparent)">
+<span>Vade</span><span>Müşteri</span><span>Tür</span><span>Dönem</span><span style="text-align:right">Tahakkuk</span>
+</div>
+<sc-for list="{{ deadlineRows }}" as="d" hint-placeholder-count="5">
+<div class="crow" style="display:grid;grid-template-columns:78px minmax(150px,1.4fr) 84px 78px 104px;align-items:center;padding:5px 10px;border-bottom:1px solid var(--color-divider);font-size:12px" onClick="{{ d.open }}">
+<span class="num" style="font-size:11px;color:{{ d.color }};font-weight:{{ d.weight }}">{{ d.dueStr }}</span>
+<span style="display:flex;align-items:center;gap:7px;min-width:0">
+<span class="pill" style="background:{{ d.accent }};color:var(--color-bg)">{{ d.badge }}</span>
+<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ d.client }}</span>
+</span>
+<span style="text-transform:uppercase;font-size:10.5px;opacity:.7">{{ d.kind }}</span>
+<span class="num" style="font-size:11px;opacity:.65">{{ d.period }}</span>
+<span class="num" style="text-align:right">{{ d.payableStr }}</span>
+</div>
+</sc-for>
+<div style="padding:7px 10px;font-size:10.5px;opacity:.55;line-height:1.5">{{ deadlineNote }}</div>
+</sc-if>
+
+<sc-if value="{{ hasGaps }}" hint-placeholder-val="{{ true }}">
+<div style="display:flex;align-items:baseline;gap:9px;margin:16px 0 5px">
+<h4 style="margin:0;font-size:12.5px">Eksikler</h4>
+<span style="font-size:10.5px;opacity:.5">{{ gapNote }}</span>
+</div>
+<sc-for list="{{ gapRows }}" as="g" hint-placeholder-count="4">
+<div class="crow" style="display:flex;align-items:center;gap:9px;padding:5px 10px;border-bottom:1px solid var(--color-divider);font-size:12px" onClick="{{ g.open }}">
+<span class="pill" style="background:{{ g.accent }};color:var(--color-bg)">{{ g.badge }}</span>
+<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:none;max-width:210px">{{ g.client }}</span>
+<span style="font-size:11px;opacity:.65;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ g.detail }}</span>
+</div>
+</sc-for>
+</sc-if>
+
+<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-top:20px">
 <h4 style="margin:0">Müşteriler</h4>
 <span class="num" style="font-size:11.5px;opacity:.55">{{ clientCountLabel }}</span>
 <input class="input" style="margin-left:auto;min-width:240px" placeholder="Müşteri ara…" value="{{ search }}" onChange="{{ onSearch }}">
 </div>
 <hr class="hr" style="margin:12px 0 0">
 
-<div style="display:grid;grid-template-columns:minmax(200px,1.6fr) 120px 90px 130px 90px 100px;padding:7px 12px;border-bottom:1px solid var(--color-text);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:color-mix(in srgb, var(--color-text) 60%, transparent)">
-<span>Müşteri</span><span>VKN</span><span style="text-align:right">Fatura</span><span style="text-align:right">Toplam</span><span style="text-align:right">İşaretli</span><span style="text-align:right">Yıllar</span>
+<div style="display:grid;grid-template-columns:minmax(180px,1.5fr) 118px 74px 118px minmax(150px,1fr) 84px;padding:7px 12px;border-bottom:1px solid var(--color-text);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:color-mix(in srgb, var(--color-text) 60%, transparent)">
+<span>Müşteri</span><span>VKN</span><span style="text-align:right">Fatura</span><span style="text-align:right">Toplam</span><span>Durum</span><span style="text-align:right">Yıllar</span>
 </div>
 <sc-for list="{{ clientRows }}" as="c" hint-placeholder-count="4">
-<div class="crow" style="display:grid;grid-template-columns:minmax(200px,1.6fr) 120px 90px 130px 90px 100px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--color-divider);font-size:12.5px" onClick="{{ c.open }}">
+<div class="crow" style="display:grid;grid-template-columns:minmax(180px,1.5fr) 118px 74px 118px minmax(150px,1fr) 84px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--color-divider);font-size:12.5px" onClick="{{ c.open }}">
 <span style="display:flex;align-items:center;gap:8px;min-width:0">
 <span style="width:7px;height:7px;border-radius:50%;flex:none;background:{{ c.dot }}"></span>
 <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.label }}</span>
@@ -118,7 +178,10 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 <span class="num" style="font-size:11.5px;opacity:.6">{{ c.taxId }}</span>
 <span class="num" style="text-align:right">{{ c.invoices }}</span>
 <span class="num" style="text-align:right">{{ c.totalStr }}</span>
-<span class="num" style="text-align:right;color:{{ c.flaggedColor }}">{{ c.flaggedLabel }}</span>
+<span style="display:flex;align-items:center;gap:5px;min-width:0;font-size:11px">
+<span class="pill" style="background:{{ c.riskAccent }};color:var(--color-bg)">{{ c.riskBadge }}</span>
+<span style="opacity:.65;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.riskNote }}</span>
+</span>
 <span class="num" style="text-align:right;font-size:11px;opacity:.6">{{ c.years }}</span>
 </div>
 </sc-for>
@@ -401,7 +464,7 @@ class Component extends DCLogic {
   state = {
     view: 'list', clientId: null, client: null, year: null, month: null,
     loading: true, search: '',
-    clients: [], sum: null, cats: [], months: [], recurring: [], ledger: [],
+    clients: [], overview: null, sum: null, cats: [], months: [], recurring: [], ledger: [],
     tahakkuklar: [], docs: [], vat: null,
     tree: [], openYears: [], openMonths: [], docType: null,
     preview: null,
@@ -461,12 +524,26 @@ class Component extends DCLogic {
 
   async loadClients() {
     try {
-      const clients = await fetch('/api/clients').then(r => r.json());
-      this.setState({ clients, loading: false });
+      const [clients, overview] = await Promise.all([
+        fetch('/api/clients').then(r => r.json()),
+        fetch('/api/overview').then(r => r.json()).catch(() => null)
+      ]);
+      this.setState({ clients, overview, loading: false });
     } catch (e) {
       this.setState({ loading: false });
     }
   }
+
+  /** Open a client straight at the period the agenda row refers to. */
+  openAt = (clientId, year, month) => async () => {
+    const client = this.state.clients.find(c => c.id === clientId);
+    if (!client) return;
+    await this.openClient(client);
+    if (year) {
+      this.setState({ openYears: [year], openMonths: month ? [`${year}-${month}`] : [] });
+      await this.select(year, month || null, null);
+    }
+  };
 
   // Every request carries the client scope. The server enforces it too -- this is a
   // confidentiality boundary, not a display filter -- but sending it consistently is
@@ -711,19 +788,93 @@ class Component extends DCLogic {
     const acc = 'var(--color-accent)';
     const sum = st.sum || {};
 
+    // ---- gündem: deadlines and gaps ----------------------------------------------
+    const ov = st.overview || { deadlines: [], gaps: [], overdue_count: 0,
+                                due_soon_count: 0, total_due: 0 };
+    const BUCKET = {
+      gecikmis: { badge: 'Vadesi geçti', accent: 'var(--color-accent-800)' },
+      bu_hafta: { badge: 'Bu hafta',     accent: 'var(--color-accent-600)' },
+      bu_ay:    { badge: 'Bu ay',        accent: 'var(--color-accent-400)' },
+      ileri:    { badge: 'İleri',        accent: 'var(--color-neutral-400)' }
+    };
+    const GAP = {
+      missing_declaration: { badge: 'Eksik belge', accent: 'var(--color-accent-800)' },
+      unreadable:          { badge: 'Okunamadı',   accent: 'var(--color-accent-600)' },
+      missing_file:        { badge: 'Dosya yok',   accent: 'var(--color-neutral-500)' }
+    };
+
+    // "İleri" is not something to act on today, so the board leads with what is.
+    const boardDeadlines = ov.deadlines.filter(d => d.bucket !== 'ileri');
+    const deadlineRows = boardDeadlines.slice(0, 12).map(d => {
+      const b = BUCKET[d.bucket] || BUCKET.ileri;
+      return {
+        dueStr: this.trDate(d.due_date), client: d.client_label,
+        kind: this.KIND[d.kind] || (d.kind || '—'),
+        period: d.period || '—',
+        // A flagged receipt never reaches this board, so every amount here was checked.
+        payableStr: this.fmt(d.payable).replace(' TL', ''),
+        badge: b.badge, accent: b.accent,
+        color: d.bucket === 'gecikmis' ? 'var(--color-accent-800)' : 'inherit',
+        weight: d.bucket === 'gecikmis' ? '600' : '400',
+        open: this.openAt(d.client_id, d.doc_year, d.doc_month)
+      };
+    });
+
+    const gapRows = ov.gaps.slice(0, 12).map(g => {
+      const s = GAP[g.reason] || GAP.missing_file;
+      return {
+        client: g.client_label, detail: g.detail,
+        badge: s.badge, accent: s.accent,
+        open: this.openAt(g.client_id, g.doc_year, g.doc_month)
+      };
+    });
+
+    // "Tahakkuk eden" and not "borç": nothing here records whether a filing was paid.
+    // Calling it outstanding would state something the data cannot support.
+    const agendaCards = [
+      { label: 'Vadesi geçti', value: String(ov.overdue_count),
+        accent: ov.overdue_count ? 'var(--color-accent-800)' : 'inherit',
+        note: ov.overdue_count ? 'ödendiği bilinmiyor' : 'geciken yok' },
+      { label: 'Bu ay vadesi gelen', value: String(ov.due_soon_count),
+        accent: ov.due_soon_count ? 'var(--color-accent-600)' : 'inherit',
+        note: 'tahakkuk fişindeki vadeye göre' },
+      { label: 'Tahakkuk eden', value: this.fmt(ov.total_due).replace(' TL', ''),
+        accent: 'inherit', note: 'vadesi gelen + geçen toplamı' },
+      { label: 'Eksik / okunamayan', value: String(ov.gaps.length),
+        accent: ov.gaps.length ? 'var(--color-accent-600)' : 'inherit',
+        note: ov.gaps.length ? 'aşağıda listeleniyor' : 'eksik yok' }
+    ];
+
+    // Worst problem per client, for the Durum column.
+    const riskByClient = {};
+    ov.deadlines.forEach(d => {
+      if (d.bucket !== 'gecikmis') return;
+      riskByClient[d.client_id] = riskByClient[d.client_id]
+        || { badge: 'Vadesi geçti', accent: 'var(--color-accent-800)', note: '' };
+    });
+    ov.gaps.forEach(g => {
+      if (riskByClient[g.client_id]) return;
+      const s = GAP[g.reason] || GAP.missing_file;
+      riskByClient[g.client_id] = { badge: s.badge, accent: s.accent, note: g.detail };
+    });
+
     // ---- client list -------------------------------------------------------------
     const q = st.search.trim().toLowerCase();
     const shown = st.clients.filter(c =>
       !q || (c.label || '').toLowerCase().includes(q) || (c.tax_id || '').includes(q));
-    const clientRows = shown.map(c => ({
-      label: c.label, taxId: c.tax_id || '—', invoices: c.invoices,
-      totalStr: this.fmt(c.total).replace(' TL', ''),
-      flaggedLabel: c.flagged ? c.flagged : '—',
-      flaggedColor: c.flagged ? 'var(--color-accent-700)' : 'inherit',
-      years: (c.years || []).join(', ') || '—',
-      dot: c.flagged ? acc : 'var(--color-neutral-300)',
-      open: () => this.openClient(c)
-    }));
+    const clientRows = shown.map(c => {
+      const risk = riskByClient[c.id];
+      return {
+        label: c.label, taxId: c.tax_id || '—', invoices: c.invoices,
+        totalStr: this.fmt(c.total).replace(' TL', ''),
+        years: (c.years || []).join(', ') || '—',
+        dot: risk ? risk.accent : (c.flagged ? acc : 'var(--color-neutral-300)'),
+        riskBadge: risk ? risk.badge : 'Tamam',
+        riskAccent: risk ? risk.accent : 'var(--color-neutral-400)',
+        riskNote: risk ? risk.note : (c.flagged ? `${c.flagged} fatura incelenmeli` : ''),
+        open: () => this.openClient(c)
+      };
+    });
 
     // ---- client workspace --------------------------------------------------------
     const cats = st.cats.map(c => ({
@@ -971,6 +1122,17 @@ class Component extends DCLogic {
       headline: st.view === 'list'
         ? `${st.clients.length} müşteri · ${totalInvoices} fatura · ${this.fmt(totalClients)}`
         : `${sum.invoices ?? 0} fatura · ${this.fmt(sum.total)} · KDV ${this.fmt(sum.tax)} · ${sum.flagged ?? 0} işaretli`,
+
+      agendaCards,
+      agendaNote: st.loading ? 'yükleniyor…'
+        : `${ov.deadlines.length} vade · ${ov.gaps.length} eksik`,
+      deadlineRows, hasDeadlines: deadlineRows.length > 0,
+      deadlineNote: boardDeadlines.length > 12
+        ? `İlk 12 gösteriliyor, toplam ${boardDeadlines.length}.`
+        : 'Vade tarihleri tahakkuk fişinden okunur. Ödeme kaydı tutulmadığı için '
+          + '"vadesi geçti" ödenmediği anlamına gelmez.',
+      gapRows, hasGaps: gapRows.length > 0,
+      gapNote: `${ov.gaps.length} kayıt`,
 
       search: st.search, onSearch: this.onSearch,
       clientRows,

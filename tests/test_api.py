@@ -926,3 +926,80 @@ def test_the_tree_labels_strip_the_ordering_prefix(foldered):
     by_type = {c["doc_type"]: c["label"] for c in cats}
     assert by_type["1_Gelir_Faturalari"] == "Gelir Faturalari"
     assert by_type["5_Banka_Ekstreleri"] == "Banka Ekstreleri"
+
+
+# --- /api/overview: deadlines and gaps ------------------------------------------------
+
+
+@pytest.fixture
+def practice(tmp_path, monkeypatch):
+    from malimusavir import clients
+
+    db_path = tmp_path / "overview.db"
+    monkeypatch.setattr(api, "DB_PATH", db_path)
+    conn = db.connect(db_path)
+    acme = clients.resolve(conn, "45678912345 - Acme")
+    clients.set_metadata(conn, acme.id, display="Acme Ltd.")
+
+    invoice = ExtractedInvoice(
+        invoice_no="F1", date="2026-01-10", vendor="V", vendor_tax_id="9",
+        total_amount=120.0, tax_amount=20.0, net_amount=100.0, category="hizmet",
+        currency="TL", content_hash="h-f1", profile="test",
+    )
+    invoice.client_id, invoice.doc_year, invoice.doc_month = acme.id, 2026, 1
+    db.upsert_invoice(conn, invoice)
+
+    conn.execute(
+        "INSERT INTO declarations (client_id, kind, period, payable, due_date, doc_year, "
+        "doc_month, source_path, content_hash, needs_review, ingested_at) VALUES "
+        "(?, 'kdv', '2026-02', 750.0, '2026-03-28', 2026, 2, 'C:/a/t.pdf', 'h-t', 0, "
+        "'2026-01-01T00:00:00')", (acme.id,))
+    conn.commit()
+    conn.close()
+    return TestClient(api.app), acme.id
+
+
+def test_overview_buckets_by_the_supplied_date(practice):
+    """?today= exists so the board can be read against any period, and so this is
+    testable without freezing the clock."""
+    client, _ = practice
+    body = client.get("/api/overview?today=2026-03-25").json()
+    assert body["today"] == "2026-03-25"
+    assert [d["bucket"] for d in body["deadlines"]] == ["bu_hafta"]
+    assert body["due_soon_count"] == 1 and body["overdue_count"] == 0
+
+    later = client.get("/api/overview?today=2026-04-01").json()
+    assert later["overdue_count"] == 1
+
+
+def test_overview_total_is_assessed_not_outstanding(practice):
+    client, _ = practice
+    assert client.get("/api/overview?today=2026-03-25").json()["total_due"] \
+        == pytest.approx(750.0)
+
+
+def test_overview_reports_a_period_missing_its_declaration(practice):
+    """January has an invoice and no declaration; by late March it is well past due."""
+    client, _ = practice
+    gaps = client.get("/api/overview?today=2026-03-25").json()["gaps"]
+    missing = [g for g in gaps if g["reason"] == "missing_declaration"]
+    assert len(missing) == 1
+    assert (missing[0]["doc_year"], missing[0]["doc_month"]) == (2026, 1)
+
+
+def test_overview_does_not_flag_a_period_that_is_not_due_yet(practice):
+    client, _ = practice
+    gaps = client.get("/api/overview?today=2026-02-05").json()["gaps"]
+    assert [g for g in gaps if g["reason"] == "missing_declaration"] == []
+
+
+def test_overview_scopes_to_a_client(practice):
+    client, acme_id = practice
+    assert len(client.get(f"/api/overview?client={acme_id}&today=2026-03-25")
+               .json()["deadlines"]) == 1
+    assert client.get("/api/overview?client=9999&today=2026-03-25").json()["deadlines"] == []
+
+
+def test_overview_rejects_a_bad_date(practice):
+    client, _ = practice
+    assert client.get("/api/overview?today=yarin").status_code == 400

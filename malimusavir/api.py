@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from datetime import date
 from pathlib import Path
 from sqlite3 import Connection
 
@@ -25,7 +26,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import agent, archive, clients, db, foundry, pipeline, rag, router, stats
+from . import (agent, archive, clients, compliance, db, foundry, pipeline, rag,
+               router, stats)
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
@@ -180,6 +182,46 @@ class VatSummaryOut(BaseModel):
     #: reported side by side rather than reconciled into one number.
     assessed_vat: float | None = None
     assessed_receipts: int = 0
+
+
+class DeadlineRow(BaseModel):
+    """One filing whose due date the tax office actually set."""
+
+    client_id: int | None = None
+    client_label: str
+    kind: str | None = None
+    period: str | None = None
+    payable: float | None = None
+    due_date: str
+    days_left: int
+    bucket: str            #: gecikmis | bu_hafta | bu_ay | ileri
+    declaration_id: int
+    doc_year: int | None = None
+    doc_month: int | None = None
+
+
+class GapRow(BaseModel):
+    client_id: int | None = None
+    client_label: str
+    reason: str            #: missing_declaration | unreadable | missing_file
+    detail: str
+    doc_year: int | None = None
+    doc_month: int | None = None
+    count: int
+
+
+class OverviewOut(BaseModel):
+    """The practice at a glance."""
+
+    deadlines: list[DeadlineRow]
+    gaps: list[GapRow]
+    overdue_count: int
+    due_soon_count: int
+    #: Assessed and due, NOT outstanding. Nothing in this system records payment -- the
+    #: tahakkuk says what was assessed, not whether it was settled. The UI must word it
+    #: that way too.
+    total_due: float
+    today: str
 
 
 class TreeCategory(BaseModel):
@@ -527,6 +569,33 @@ def get_vat_summary(since: str | None = None, until: str | None = None,
         tax_id_missing=tax_id_missing,
         assessed_vat=float(row["total"]) if row["n"] else None,
         assessed_receipts=row["n"],
+    )
+
+
+@app.get("/api/overview", response_model=OverviewOut)
+def get_overview(client: str | None = None, today: str | None = None,
+                 conn: Connection = Depends(get_conn)):
+    """Filing deadlines and document gaps -- what needs attention.
+
+    ``today`` overrides the date, which exists so the board can be inspected against a
+    period other than the current one; it is also what makes this testable without
+    freezing the clock.
+    """
+    when = date.today()
+    if today:
+        try:
+            when = date.fromisoformat(today)
+        except ValueError:
+            raise HTTPException(400, f"invalid date: {today!r}") from None
+
+    result = compliance.overview(conn, today=when, client_id=_scope(client))
+    return OverviewOut(
+        deadlines=[DeadlineRow(**vars(d)) for d in result.deadlines],
+        gaps=[GapRow(**vars(g)) for g in result.gaps],
+        overdue_count=len(result.overdue),
+        due_soon_count=len(result.due_soon),
+        total_due=result.total_due,
+        today=when.isoformat(),
     )
 
 
