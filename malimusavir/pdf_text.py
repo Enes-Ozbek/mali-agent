@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pdfplumber
 
+from . import paths
 from .normalize import fold_tr
 
 REDACTED = "[GIZLENDI]"
@@ -374,7 +375,7 @@ def redact_terms() -> tuple[str, ...]:
     raw = os.environ.get("MALIMUSAVIR_REDACT", "")
     terms.extend(part.strip() for part in raw.split(",") if part.strip())
 
-    config = Path(__file__).resolve().parent.parent / "redact.txt"
+    config = paths.user_data("redact.txt")
     if config.exists():
         for line in config.read_text(encoding="utf-8").splitlines():
             line = line.strip()

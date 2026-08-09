@@ -13,3 +13,7 @@ sample_archive/
 # The trained head (malimusavir/models/*.npz) IS committed: it is small and means
 # nobody has to retrain to use the project.
 training/data/embeddings.npz
+
+# PyInstaller build output -- regenerable, and 215 MB.
+build/
+dist/

@@ -18,8 +18,9 @@ from pathlib import Path
 import numpy as np
 
 from . import foundry
+from . import paths
 
-MODEL_PATH = Path(__file__).resolve().parent / "models" / "category_clf.npz"
+MODEL_PATH = paths.resource("malimusavir", "models", "category_clf.npz")
 
 
 class _Model:

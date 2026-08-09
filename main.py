@@ -352,7 +352,38 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _use_utf8_console() -> None:
+    """Make stdout/stderr able to carry Turkish.
+
+    A Windows console defaults to cp1252, which has no ş, ğ or İ. Printing
+    "başlatılıyor" therefore raised UnicodeEncodeError and killed the process before
+    the server started -- invisible from source, where PYTHONIOENCODING was set, and
+    immediate in the frozen build where nothing sets it. Since every message this
+    program prints is Turkish, the encoding is fixed here rather than relied upon.
+
+    errors="replace" so a console that genuinely cannot render a glyph shows a
+    substitute instead of taking the app down with it.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass          # redirected to something that cannot be reconfigured
+
+
 def main(argv: list[str] | None = None) -> int:
+    _use_utf8_console()
+    argv = list(sys.argv[1:] if argv is None else argv)
+
+    # Double-clicking the built .exe passes no arguments, and the parser requires an
+    # action -- so without this the app would open, print an argparse error and close
+    # again. A bare launch means "run the thing", which for a desktop build is the
+    # dashboard. From source the CLI is unchanged: `python main.py` still asks for one.
+    from malimusavir import paths
+
+    if not argv and paths.is_frozen():
+        argv = ["--serve", "--open-browser"]
+
     args = build_parser().parse_args(argv)
     # `is not None`, not truthiness: an empty --ask "" or --ingest "" is falsy and
     # would silently fall through to --review instead of reporting a bad argument.

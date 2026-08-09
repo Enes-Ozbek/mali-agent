@@ -9,10 +9,13 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from . import paths
 from .extractors.base import FIELDS, ExtractedInvoice
 
-DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "faturalar.db"
-SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schema.sql"
+#: The user's data: beside the .exe when frozen, so it survives closing the app.
+DEFAULT_DB_PATH = paths.user_data("faturalar.db")
+#: Ships with the build, read-only.
+SCHEMA_PATH = paths.resource("schema.sql")
 
 
 class IngestResult(str, Enum):

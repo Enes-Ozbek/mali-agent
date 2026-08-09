@@ -26,10 +26,10 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (agent, archive, clients, compliance, db, foundry, hesap, pipeline,
-               rag, router, stats)
+from . import (agent, archive, clients, compliance, db, foundry, hesap, paths,
+               pipeline, rag, router, stats)
 
-WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+WEB_DIR = paths.resource("web")
 
 #: Set by main.py's --serve wiring before the server starts. None means db.DEFAULT_DB_PATH.
 DB_PATH: str | Path | None = None
