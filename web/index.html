@@ -43,6 +43,11 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 .pill{flex:none;font-size:9px;letter-spacing:.04em;text-transform:uppercase;
       padding:1px 6px;border-radius:9px;white-space:nowrap}
 .acctbtn{flex:none;font-size:10px;padding:2px 7px;font-variant-numeric:tabular-nums}
+/* Search lives in the header so it survives whatever grows underneath it. It used to
+   sit above the client table, which put it 929px down once the Gündem board landed on
+   top -- present in the DOM, invisible in a 720px viewport. */
+.search{margin-left:auto;min-width:210px;max-width:280px;flex:0 1 auto}
+@media (max-width:1100px){.search{min-width:150px}}
 .tnode{cursor:pointer;user-select:none}
 .tnode:hover{background:color-mix(in srgb, var(--color-accent) 10%, transparent)}
 .ok{color:var(--color-accent-700)}
@@ -99,7 +104,8 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 <span class="num" style="font-size:11px;opacity:.55">{{ client.meta }}</span>
 </span>
 </sc-if>
-<span class="num" style="margin-left:auto;font-size:11.5px;opacity:.65">{{ headline }}</span>
+<input class="input search" id="clientsearch" placeholder="Müşteri ara…  ( / )" value="{{ search }}" onChange="{{ onSearch }}" onKeyDown="{{ onSearchKey }}">
+<span class="num" style="font-size:11.5px;opacity:.65;white-space:nowrap">{{ headline }}</span>
 </div>
 
 <div class="shell">
@@ -108,6 +114,7 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 <sc-if value="{{ isList }}" hint-placeholder-val="{{ true }}">
 <div class="scroll" style="height:100%;overflow:auto;padding:18px 22px">
 
+<sc-if value="{{ showAgenda }}" hint-placeholder-val="{{ true }}">
 <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:11px">
 <h4 style="margin:0">Gündem</h4>
 <span class="num" style="font-size:11.5px;opacity:.55">{{ agendaNote }}</span>
@@ -159,11 +166,14 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 </div>
 </sc-for>
 </sc-if>
+</sc-if>
 
-<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-top:20px">
+<div id="clientlist" style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-top:20px">
 <h4 style="margin:0">Müşteriler</h4>
 <span class="num" style="font-size:11.5px;opacity:.55">{{ clientCountLabel }}</span>
-<input class="input" style="margin-left:auto;min-width:240px" placeholder="Müşteri ara…" value="{{ search }}" onChange="{{ onSearch }}">
+<sc-if value="{{ isSearching }}" hint-placeholder-val="{{ false }}">
+<button class="link" style="font-size:11px" onClick="{{ clearSearch }}">aramayı temizle</button>
+</sc-if>
 </div>
 <hr class="hr" style="margin:12px 0 0">
 
@@ -562,6 +572,7 @@ class Component extends DCLogic {
 
   async componentDidMount() {
     this.bindEscape();
+    this.bindSearchKey();
     await this.loadClients();
     this.setState({ chat: this.greetAll() });
   }
@@ -731,12 +742,57 @@ class Component extends DCLogic {
     });
   }
 
-  back = () => this.setState({
-    view: 'list', clientId: null, client: null, year: null, month: null,
-    tab: 'genel', folder: null, fileStatus: '', chat: this.greetAll(),
-    tree: [], docType: null, preview: null
-  });
-  onSearch = (e) => this.setState({ search: e.target.value });
+  /** Everything that must reset when leaving a client. Shared by the back link and by
+   *  the header search, so a search cannot leave one client's tree or scope behind. */
+  backState() {
+    return {
+      view: 'list', clientId: null, client: null, year: null, month: null,
+      tab: 'genel', folder: null, fileStatus: '', chat: this.greetAll(),
+      tree: [], docType: null, preview: null
+    };
+  }
+
+  back = () => this.setState(this.backState());
+  /** Typing in the header search always means "find me a client".
+   *
+   *  So it returns to the list from wherever you are -- looking for a client while
+   *  inside a different one is the normal case, and having to click back first is the
+   *  friction the header search exists to remove.
+   */
+  onSearch = (e) => {
+    const search = e.target.value;
+    if (search.trim() && this.state.view !== 'list') {
+      this.setState({ ...this.backState(), search });
+      return;
+    }
+    this.setState({ search });
+  };
+
+  onSearchKey = (e) => {
+    if (e.key === 'Escape') {
+      this.setState({ search: '' });
+      if (e.target) e.target.blur();
+    }
+  };
+
+  clearSearch = () => {
+    this.setState({ search: '' });
+    const box = document.getElementById('clientsearch');
+    if (box) box.focus();
+  };
+
+  /** "/" focuses the search, the way it does in most tools with a list. */
+  bindSearchKey() {
+    if (this._searchBound) return;
+    this._searchBound = true;
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+      const tag = (e.target && e.target.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea') return;   // already typing somewhere
+      const box = document.getElementById('clientsearch');
+      if (box) { e.preventDefault(); box.focus(); box.select(); }
+    });
+  }
 
   setTabGenel = () => this.setState({ tab: 'genel', fileStatus: '' });
   setTabDosyalar = () => this.setState({ tab: 'dosyalar', folder: null, fileStatus: '' });
@@ -1249,7 +1305,12 @@ class Component extends DCLogic {
       gapRows, hasGaps: gapRows.length > 0,
       gapNote: `${ov.gaps.length} kayıt`,
 
-      search: st.search, onSearch: this.onSearch,
+      search: st.search, onSearch: this.onSearch, onSearchKey: this.onSearchKey,
+      clearSearch: this.clearSearch, isSearching: !!st.search.trim(),
+      // Searching means "find me a client", so the day's agenda steps out of the way --
+      // otherwise the matching row sits ~900px below the fold and the search appears
+      // to have done nothing.
+      showAgenda: !st.search.trim(),
       clientRows,
       clientCountLabel: `${shown.length} / ${st.clients.length}`,
       clientNote: st.loading ? 'Yükleniyor…'
