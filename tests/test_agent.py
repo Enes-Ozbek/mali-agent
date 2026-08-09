@@ -275,3 +275,22 @@ def test_plain_text_never_touches_the_figures():
 def test_plain_text_leaves_ordinary_prose_alone():
     text = "Canan Aydın'ın 3 faturası vardır, toplam 9.000,00 TL."
     assert agent.plain_text(text) == text
+
+
+def test_plain_text_drops_an_echoed_question():
+    """"Peki kaç fatura vardı?\n3 fatura." -- the restatement adds nothing."""
+    cleaned = agent.plain_text("Peki kaç fatura vardı?\n3 fatura.",
+                               question="Peki kaç fatura vardı?")
+    assert cleaned == "3 fatura."
+
+
+def test_plain_text_keeps_a_first_line_that_is_not_just_the_question():
+    """Only an exact repeat goes; a first line carrying any answer stays."""
+    reply = "Kaç faturası var? Üç tane.\nToplam 9.000,00 TL."
+    assert agent.plain_text(reply, question="Kaç faturası var?") == reply
+
+
+def test_plain_text_keeps_a_single_line_reply_even_if_it_echoes():
+    """Dropping it would leave nothing at all."""
+    assert agent.plain_text("Kaç faturası var?", question="Kaç faturası var?") \
+        == "Kaç faturası var?"

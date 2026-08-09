@@ -100,9 +100,11 @@ Kurallar:
 _GROUNDED = """HESAPLANAN VERİ (veritabanından, doğrudur):
 {facts}
 
-Kullanıcının sorusu: {question}
+Kullanıcının ŞU ANKİ sorusu: {question}
 
-Yukarıdaki veriyi kullanarak soruyu doğal bir Türkçe cümleyle yanıtla."""
+Yukarıdaki veriyi kullanarak soruyu doğal bir Türkçe cümleyle yanıtla.
+Doğrudan cevabı yaz: soruyu tekrar etme, gerekçeni açıklama, önceki yanıtını
+kopyalama. Sohbet geçmişi yalnızca bağlam içindir."""
 
 #: Used when the computed answer is a table or has several clauses that each carry a
 #: figure. Measured against qwen3-4b: with the plain template above, the full monthly
@@ -114,9 +116,10 @@ Yukarıdaki veriyi kullanarak soruyu doğal bir Türkçe cümleyle yanıtla."""
 _GROUNDED_TABLE = """HESAPLANAN VERİ (veritabanından, doğrudur):
 {facts}
 
-Kullanıcının sorusu: {question}
+Kullanıcının ŞU ANKİ sorusu: {question}
 
 Bu veriyi Türkçe olarak aktar. Kurallar:
+- Önceki yanıtını tekrarlama; cevap yukarıdaki HESAPLANAN VERİ'dedir.
 - Verideki HER satırı ve HER rakamı yanıtına dahil et. Hiçbirini atlama, özetleme
   veya "vb." deyip geçme.
 - Rakamları aynen kopyala; yeniden hesaplama, toplama veya yuvarlama yapma.
@@ -140,12 +143,14 @@ _BOLD = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
 _HEADING = re.compile(r"^\s{0,3}#{1,6}\s*", re.MULTILINE)
 _RULE = re.compile(r"^\s*[-*_]{3,}\s*$", re.MULTILINE)
 _STAR_BULLET = re.compile(r"^(\s*)\*\s+", re.MULTILINE)
+#: Any line mentioning the prompt's own label, not just one starting with it -- the
+#: model also produces trailing fragments like "Yukarıdaki HESAPLANAN VERİ".
 _SCAFFOLD = re.compile(
-    r"^\s*(HESAPLANAN VERİ|HESAPLANAN VERI)\b.*$", re.MULTILINE | re.IGNORECASE)
+    r"^.*HESAPLANAN VER[İI].*$", re.MULTILINE | re.IGNORECASE)
 _BLANK_RUN = re.compile(r"\n{3,}")
 
 
-def plain_text(text: str) -> str:
+def plain_text(text: str, question: str | None = None) -> str:
     """Strip markdown and echoed prompt headers from a model reply.
 
     The panel renders replies as plain text, so "**19.000,00 TL**" reaches the user
@@ -167,7 +172,21 @@ def plain_text(text: str) -> str:
     cleaned = _RULE.sub("", cleaned)
     cleaned = _STAR_BULLET.sub(r"\1- ", cleaned)
     cleaned = cleaned.replace("**", "")
-    return _BLANK_RUN.sub("\n\n", cleaned).strip()
+    cleaned = _BLANK_RUN.sub("\n\n", cleaned).strip()
+
+    # The model often opens by restating the question ("Peki kaç fatura vardı?\n3
+    # fatura."). Only an exact repeat is dropped, so a first line that merely starts
+    # similarly -- or contains any of the answer -- is left alone.
+    if question:
+        head, _, rest = cleaned.partition("\n")
+        if rest.strip() and _same_text(head, question):
+            cleaned = rest.strip()
+    return cleaned
+
+
+def _same_text(left: str, right: str) -> bool:
+    strip = str.maketrans("", "", " \t?!.,:;\"'()")
+    return fold_tr(left).translate(strip) == fold_tr(right).translate(strip)
 
 
 def _now_tr() -> str:
@@ -388,7 +407,7 @@ def answer(
             # rather than failing the request outright.
             return AgentReply(computed.text, "router", computed.intent.value,
                               facts=computed.text)
-        return AgentReply(plain_text(phrased) or computed.text, "router+llm",
+        return AgentReply(plain_text(phrased, question) or computed.text, "router+llm",
                           computed.intent.value, facts=computed.text)
 
     # Not an aggregate. Retrieval decides which of two very different things this is:
@@ -420,7 +439,7 @@ def answer(
             )
         except foundry.FoundryError:
             raise
-        return AgentReply(plain_text(text) or "Şu an yanıt veremiyorum.",
+        return AgentReply(plain_text(text, question) or "Şu an yanıt veremiyorum.",
                           "agent+llm", "off_topic")
 
     text, hits = rag.answer(conn, question, history=turns, system=_system_prompt(),
@@ -432,7 +451,7 @@ def answer(
         }
         for h in hits
     ]
-    return AgentReply(plain_text(text), "rag", "semantic", sources=sources)
+    return AgentReply(plain_text(text, question), "rag", "semantic", sources=sources)
 
 
 def converse(
