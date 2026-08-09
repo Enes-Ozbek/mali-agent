@@ -22,12 +22,12 @@ from sqlite3 import Connection
 import numpy as np
 import pandas as pd
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (agent, archive, clients, compliance, db, foundry, pipeline, rag,
-               router, stats)
+from . import (agent, archive, clients, compliance, db, foundry, hesap, pipeline,
+               rag, router, stats)
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
@@ -596,6 +596,68 @@ def get_overview(client: str | None = None, today: str | None = None,
         due_soon_count=len(result.due_soon),
         total_due=result.total_due,
         today=when.isoformat(),
+    )
+
+
+class JournalRejection(BaseModel):
+    invoice_no: str
+    reason: str
+
+
+class JournalOut(BaseModel):
+    """A journal preview: what would post, and what would not."""
+
+    entry_count: int
+    line_count: int
+    total_debit: float
+    total_credit: float
+    balanced: bool
+    rejected: list[JournalRejection]
+
+
+def _overrides(conn: Connection) -> dict[str, str]:
+    """Category → expense account, as configured. Empty means everything is 770."""
+    rows = conn.execute(
+        "SELECT category, account FROM hesap_overrides").fetchall()
+    return {r["category"]: r["account"] for r in rows}
+
+
+@app.get("/api/journal", response_model=JournalOut)
+def get_journal(client: str | None = None, year: int | None = None,
+                month: int | None = None, conn: Connection = Depends(get_conn)):
+    """What the export would contain, without downloading it.
+
+    Shown before the download so an operator sees the rejected invoices first. An
+    export that silently drops rows is how a ledger ends up short.
+    """
+    report = hesap.journal(conn, client_id=_scope(client), year=year, month=month,
+                           overrides=_overrides(conn))
+    return JournalOut(
+        entry_count=len(report.entries),
+        line_count=sum(len(e.lines) for e in report.entries),
+        total_debit=report.total_debit, total_credit=report.total_credit,
+        balanced=abs(report.total_debit - report.total_credit) <= hesap.TOLERANCE,
+        rejected=[JournalRejection(invoice_no=no, reason=why)
+                  for no, why in report.rejected],
+    )
+
+
+@app.get("/api/journal.csv")
+def get_journal_csv(client: str | None = None, year: int | None = None,
+                    month: int | None = None, conn: Connection = Depends(get_conn)):
+    """The journal as a file for Luca/Zirve/Mikro import."""
+    report = hesap.journal(conn, client_id=_scope(client), year=year, month=month,
+                           overrides=_overrides(conn))
+    # utf-8-sig: without the BOM Excel reads the file as cp1252 and every ş, ğ and İ
+    # arrives mangled -- which for account names is the difference between an import
+    # that maps and one that does not.
+    body = hesap.to_csv(report).encode("utf-8-sig")
+
+    stamp = "-".join(str(p) for p in (year, month) if p) or "tumu"
+    name = f"yevmiye-{stamp}.csv"
+    return Response(
+        content=body, media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
     )
 
 

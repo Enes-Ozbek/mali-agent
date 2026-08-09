@@ -241,10 +241,14 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 
 <div class="scroll" style="display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--color-divider);overflow:auto">
 
-<div style="padding:9px 14px 0;flex:none">
+<div style="display:flex;align-items:center;gap:9px;padding:9px 14px 0;flex:none">
 <span style="display:inline-flex;gap:2px;border:1px solid var(--color-divider);border-radius:4px;padding:1px">
 <button class="mode" style="font-size:10.5px;color:{{ genelColor }};box-shadow:{{ genelShadow }}" onClick="{{ setTabGenel }}">Genel Bakış</button>
 <button class="mode" style="font-size:10.5px;color:{{ dosyalarColor }};box-shadow:{{ dosyalarShadow }}" onClick="{{ setTabDosyalar }}">Dosyalar</button>
+</span>
+<span style="margin-left:auto;display:flex;align-items:center;gap:8px">
+<span class="num" style="font-size:10px;opacity:.55">{{ journalNote }}</span>
+<a class="btn btn-secondary" style="font-size:10.5px;padding:3px 9px;text-decoration:none" href="{{ journalUrl }}" title="Yevmiye fişlerini CSV olarak indir (Luca/Zirve içe aktarma)">Yevmiye indir</a>
 </span>
 </div>
 
@@ -465,7 +469,7 @@ class Component extends DCLogic {
     view: 'list', clientId: null, client: null, year: null, month: null,
     loading: true, search: '',
     clients: [], overview: null, sum: null, cats: [], months: [], recurring: [], ledger: [],
-    tahakkuklar: [], docs: [], vat: null,
+    tahakkuklar: [], docs: [], vat: null, journal: null,
     tree: [], openYears: [], openMonths: [], docType: null,
     preview: null,
     tab: 'genel', folder: null, fileStatus: '',
@@ -608,6 +612,10 @@ class Component extends DCLogic {
         fetch(this.scoped('/api/invoices?limit=300')).then(r => r.json()),
         fetch(this.scoped('/api/vat-summary')).then(r => r.json())
       ]);
+      // Preview only. The rejected list matters more than the count: an export that
+      // silently drops rows is how a ledger ends up short.
+      const journal = await fetch(this.scoped('/api/journal'))
+        .then(r => r.json()).catch(() => null);
       let tahakkuklar = [], docs = [];
       if (this.state.clientId !== null && this.state.clientId >= 0) {
         const sub = this.subScope();
@@ -616,7 +624,8 @@ class Component extends DCLogic {
           fetch(`/api/clients/${this.state.clientId}/documents${sub}`).then(r => r.json()).catch(() => [])
         ]);
       }
-      this.setState({ loading: false, sum, cats, months, recurring, ledger, tahakkuklar, docs, vat });
+      this.setState({ loading: false, sum, cats, months, recurring, ledger, tahakkuklar,
+                      docs, vat, journal });
     } catch (e) {
       this.setState({ loading: false });
     }
@@ -1178,6 +1187,17 @@ class Component extends DCLogic {
       tahakkukNote: tahakkuklar.length
         ? `${tahakkuklar.length} kayıt`
         : 'bu dönemde tahakkuk fişi yok',
+
+      journalUrl: this.scoped('/api/journal.csv'),
+      journalNote: (() => {
+        const j = st.journal;
+        if (!j) return '';
+        const rejected = (j.rejected || []).length;
+        // The refusals lead: they are the part that needs a person.
+        return rejected
+          ? `${j.entry_count} fiş · ${rejected} fatura aktarılamıyor`
+          : `${j.entry_count} fiş · ${j.line_count} satır`;
+      })(),
 
       isGenel: !isDosyalar, isDosyalar,
       setTabGenel: this.setTabGenel, setTabDosyalar: this.setTabDosyalar,

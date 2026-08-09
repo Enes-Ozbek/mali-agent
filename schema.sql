@@ -109,3 +109,14 @@ CREATE TABLE IF NOT EXISTS embeddings (
     dim          INTEGER NOT NULL,
     vector       BLOB NOT NULL
 );
+
+
+-- Which expense account a category posts to. Empty means everything goes to 770
+-- Genel Yonetim Giderleri, which is where the great majority of a small taxpayer's
+-- costs belong. Whether a cost is really 153 Ticari Mallar or 760 Pazarlama depends on
+-- the business rather than on the invoice, so it is stated here deliberately instead of
+-- being guessed from a keyword -- a wrong guess misposts silently until the year end.
+CREATE TABLE IF NOT EXISTS hesap_overrides (
+    category TEXT PRIMARY KEY,
+    account  TEXT NOT NULL
+);

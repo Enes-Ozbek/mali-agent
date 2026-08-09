@@ -1003,3 +1003,81 @@ def test_overview_scopes_to_a_client(practice):
 def test_overview_rejects_a_bad_date(practice):
     client, _ = practice
     assert client.get("/api/overview?today=yarin").status_code == 400
+
+
+# --- /api/journal: the Luca/Zirve bridge ----------------------------------------------
+
+
+@pytest.fixture
+def journal_client(tmp_path, monkeypatch):
+    from malimusavir import clients
+
+    db_path = tmp_path / "journal.db"
+    monkeypatch.setattr(api, "DB_PATH", db_path)
+    conn = db.connect(db_path)
+    acme = clients.resolve(conn, "45678912345 - Acme")
+
+    def add(no, direction, net, tax, total=None):
+        invoice = ExtractedInvoice(
+            invoice_no=no, date="2026-01-10", vendor="Örnek Ltd.", vendor_tax_id="1",
+            net_amount=net, tax_amount=tax,
+            total_amount=total if total is not None else net + tax,
+            category="hizmet", currency="TL", content_hash=f"h-{no}", profile="test",
+        )
+        invoice.client_id, invoice.doc_year, invoice.doc_month = acme.id, 2026, 1
+        invoice.direction = direction
+        db.upsert_invoice(conn, invoice)
+
+    add("S1", "satis", 1000.0, 200.0)
+    add("A1", "alis", 500.0, 100.0)
+    add("BAD", "alis", 100.0, 20.0, total=999.0)      # will not balance
+    conn.close()
+    return TestClient(api.app), acme.id
+
+
+def test_journal_preview_reports_what_would_post_and_what_would_not(journal_client):
+    client, cid = journal_client
+    body = client.get(f"/api/journal?client={cid}&year=2026&month=1").json()
+    assert body["entry_count"] == 2
+    assert body["line_count"] == 6
+    assert body["balanced"] is True
+    assert body["total_debit"] == pytest.approx(body["total_credit"])
+    assert [r["invoice_no"] for r in body["rejected"]] == ["BAD"]
+
+
+def test_journal_csv_downloads_as_a_file(journal_client):
+    client, cid = journal_client
+    r = client.get(f"/api/journal.csv?client={cid}&year=2026&month=1")
+    assert r.status_code == 200
+    assert "attachment" in r.headers["content-disposition"]
+    assert "yevmiye-2026-1.csv" in r.headers["content-disposition"]
+
+
+def test_journal_csv_starts_with_a_bom_so_excel_reads_turkish(journal_client):
+    """Without it Excel decodes as cp1252 and every ş and İ arrives mangled -- which
+    for account names breaks the import mapping."""
+    client, cid = journal_client
+    body = client.get(f"/api/journal.csv?client={cid}").content
+    assert body.startswith(b"\xef\xbb\xbf")
+    assert "İndirilecek KDV" in body.decode("utf-8-sig")
+
+
+def test_journal_csv_excludes_the_unbalanced_invoice(journal_client):
+    """It is listed in the preview instead. A ledger import short by a kuruş posts
+    cleanly and fails at the trial balance weeks later."""
+    client, cid = journal_client
+    text = client.get(f"/api/journal.csv?client={cid}").content.decode("utf-8-sig")
+    assert "BAD" not in text
+    assert "S1" in text and "A1" in text
+
+
+def test_a_category_override_changes_the_expense_account(journal_client):
+    client, cid = journal_client
+    conn = db.connect(api.DB_PATH)
+    conn.execute("INSERT INTO hesap_overrides (category, account) VALUES ('hizmet', '760')")
+    conn.commit()
+    conn.close()
+
+    text = client.get(f"/api/journal.csv?client={cid}").content.decode("utf-8-sig")
+    assert "760" in text
+    assert ";770;" not in text
