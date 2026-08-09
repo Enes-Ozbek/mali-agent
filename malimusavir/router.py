@@ -167,6 +167,15 @@ class Answer:
     text: str
     rows: list[dict] = field(default_factory=list)
     intent: Intent = Intent.SEMANTIC
+    #: Return this text to the user unchanged, without asking the model to reword it.
+    #:
+    #: For a figure, rewording is harmless -- the number survives. For a message that
+    #: *instructs* rather than informs, it is not: handed the scope refusal "this panel
+    #: covers Zeynep, ask on Canan's page", qwen3-4b produced "bu bilgi faturalarda
+    #: yok" -- "that information is not in the invoices". A user reading that concludes
+    #: Canan has no invoices, which is false. These messages have one correct wording
+    #: and nothing a model can add.
+    verbatim: bool = False
 
 
 def known_vendors(conn: sqlite3.Connection) -> list[str]:
@@ -612,7 +621,7 @@ def answer(conn: sqlite3.Connection, parsed: Question,
 
     client_id, client_label, refusal = resolve_client_scope(conn, parsed, client_id)
     if refusal is not None:
-        return Answer(refusal, [], parsed.intent)
+        return Answer(refusal, [], parsed.intent, verbatim=True)
 
     # These read tables the invoice frame does not cover, and must answer even when the
     # client has no invoices at all -- "tahakkuk fişi ne kadar" is a fair question for a

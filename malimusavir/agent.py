@@ -289,7 +289,11 @@ def answer(
         client_id = parsed.clients[0].id
 
     if computed is not None:
-        if not use_llm:
+        # A scope refusal is an instruction to the user, not a figure to be phrased.
+        # Measured: the model turned "this panel covers Zeynep, ask on Canan's page"
+        # into "that information is not in the invoices", which is a different and
+        # false claim. Returned unchanged, the same way capabilities() is.
+        if computed.verbatim or not use_llm:
             return AgentReply(computed.text, "router", computed.intent.value,
                               facts=computed.text)
         try:
