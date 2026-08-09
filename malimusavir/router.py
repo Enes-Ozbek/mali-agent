@@ -538,6 +538,11 @@ def _declarations_answer(conn: sqlite3.Connection, parsed: Question,
                      f"{amount:>14}  vade {row['due_date'] or '-'}")
     if len(rows) > 12:
         lines.append(f"  ... ve {len(rows) - 12} kayıt daha")
+    # Repeated as a trailing row, not only as the heading above. "Tahakkuk fişi ne
+    # kadar" is asking for exactly this figure, and qwen3-4b reliably skips a first
+    # line it reads as a header -- it kept every detail row and dropped the total.
+    # Telling it not to did not work; giving the total a row of its own does.
+    lines.append(f"  TOPLAM{'':<12}{format_tr_amount(total):>14} TL")
     return Answer("\n".join(lines), [dict(r) for r in rows], parsed.intent)
 
 

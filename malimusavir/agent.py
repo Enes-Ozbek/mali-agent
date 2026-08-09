@@ -122,6 +122,9 @@ Bu veriyi Türkçe olarak aktar. Kurallar:
 - Önceki yanıtını tekrarlama; cevap yukarıdaki HESAPLANAN VERİ'dedir.
 - Verideki HER satırı ve HER rakamı yanıtına dahil et. Hiçbirini atlama, özetleme
   veya "vb." deyip geçme.
+- İLK satırdaki özet/toplam bilgisini de mutlaka yaz. Kullanıcı "ne kadar" diye
+  sorduysa aradığı rakam çoğunlukla oradadır; sadece satırları listeleyip toplamı
+  atlamak soruyu yanıtsız bırakır.
 - Rakamları aynen kopyala; yeniden hesaplama, toplama veya yuvarlama yapma.
 - Terimin tanımını yazma. "Aylık harcama, faturaların toplamıdır" gibi bir açıklama
   yanlış bir yanıttır — kullanıcı tanımı değil, yukarıdaki rakamları istiyor.
