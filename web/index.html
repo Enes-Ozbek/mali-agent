@@ -367,7 +367,12 @@ class Component extends DCLogic {
     tree: [], openYears: [], openMonths: [], docType: null,
     preview: null,
     tab: 'genel', folder: null, fileStatus: '',
-    draft: '', asking: false, hover: null, useLlm: true,
+    // Hızlı by default. Measured on this machine: the router answers in under a
+    // second and scored 23/23 on scripts/eval_agent.py; routing the same answers
+    // through qwen3-4b takes 36-66s and only rewords a sentence that was already
+    // correct Turkish. An accountant asking "ödenecek KDV ne kadar" wants the figure,
+    // not a paragraph a minute later. AI stays one click away for conversational use.
+    draft: '', asking: false, hover: null, useLlm: false,
     chat: []
   };
 
@@ -1003,14 +1008,14 @@ class Component extends DCLogic {
           ]
         : st.year
         ? [
-            { label: `${st.year} toplamı`, ask: askNow(`${st.year} yılında toplam ne kadar?`) },
+            { label: `${st.year} KDV durumu`, ask: askNow(`${st.year} KDV durumu nedir?`) },
             { label: 'Aylık dağılım', ask: askNow(`${st.year} aylara göre ne kadar?`) },
-            { label: 'En pahalı fatura', ask: askNow(`${st.year} en pahalı fatura hangisi?`) }
+            { label: 'Tahakkuklar', ask: askNow(`${st.year} tahakkuk fişleri ne durumda?`) }
           ]
         : [
-            { label: 'Toplam harcama', ask: askNow('Toplam ne kadar harcadı?') },
-            { label: 'Düzenli ödemeler', ask: askNow('Düzenli ödemeler neler?') },
-            { label: 'En pahalı fatura', ask: askNow('En pahalı fatura hangisi?') }
+            { label: 'KDV durumu', ask: askNow('Ödenecek KDV ne kadar?') },
+            { label: 'Gelir / gider', ask: askNow('Toplam gelir ne kadar?') },
+            { label: 'Tahakkuklar', ask: askNow('Tahakkuk fişleri ne durumda?') }
           ],
       setAi: this.setAi, setFast: this.setFast,
       aiColor: st.useLlm ? acc : 'inherit',
@@ -1018,8 +1023,9 @@ class Component extends DCLogic {
       fastColor: st.useLlm ? 'inherit' : acc,
       fastShadow: st.useLlm ? 'none' : 'inset 0 0 0 1px ' + acc,
       modeNote: st.useLlm
-        ? 'Sayılar veritabanından hesaplanır, yanıtı model yazar (~30 sn).'
-        : 'Doğrudan veritabanı yanıtı — anında, model kullanılmaz.'
+        ? 'Sayılar veritabanından hesaplanır, yanıtı model yazar (~40-60 sn).'
+        : 'Doğrudan veritabanı yanıtı — anında ve aynı rakamlar. Model yalnızca '
+          + 'cümleyi yeniden yazar; sohbet için AI moduna geçin.'
     };
   }
 }

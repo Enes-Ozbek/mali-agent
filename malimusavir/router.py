@@ -552,12 +552,22 @@ def _documents_answer(conn: sqlite3.Connection, parsed: Question,
 
     # Narrow to what was asked about when the question names a document type.
     folded = fold_tr(parsed.raw)
+    terms = [word for word in folded.split() if len(word) > 4]
     matched = [r for r in rows
-               if any(word in fold_tr(f"{r['doc_type']} {r['filename']}")
-                      for word in folded.split() if len(word) > 4)]
-    shown = matched or rows
+               if any(term in fold_tr(f"{r['doc_type']} {r['filename']}")
+                      for term in terms)]
 
-    lines = [f"{len(shown)} belge{scope}:"]
+    if terms and not matched:
+        # Falling back to "here is everything" would read as though one of the listed
+        # files were the answer. Say plainly that the asked-for document is not there.
+        header = (f"Aranan belge bulunamadı{scope}. "
+                  f"Kayıtlı {len(rows)} belge şunlar:")
+        shown = rows
+    else:
+        header = f"{len(matched or rows)} belge{scope}:"
+        shown = matched or rows
+
+    lines = [header]
     for row in shown[:12]:
         period = f"{row['doc_year']}" + (f"/{row['doc_month']:02d}" if row["doc_month"] else "")
         lines.append(f"  {period}  {row['filename']}  ({row['doc_type']})")
