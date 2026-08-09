@@ -190,6 +190,29 @@ def capabilities(conn: sqlite3.Connection, client_id: int | str | None = None) -
     )
 
 
+#: Intents whose computed answer is a table or a statement where every clause carries
+#: information. The model is not asked to reword these.
+#:
+#: Measured with scripts/eval_agent.py against qwen3-4b. Given the full monthly
+#: breakdown it replied "Aylık harcama, tüm müşterilerin aylık faturalarının
+#: toplamıdır" -- a definition of the term with no data in it. Given "hesaplanan 0,00,
+#: indirilecek 39.000,00, ödenecek yok; 39.000,00 devreden" it replied "Ödenecek KDV
+#: yoktur", dropping the carried-forward figure, which is the part an accountant needs.
+#:
+#: Single-figure answers survive rewording intact and still go through the model, which
+#: is where its phrasing is worth the wait. A table cannot be improved by it, only
+#: shortened.
+TABULAR_INTENTS = frozenset({
+    router.Intent.BY_CATEGORY, router.Intent.BY_VENDOR, router.Intent.BY_MONTH,
+    router.Intent.RECURRING, router.Intent.LIST, router.Intent.DECLARATION,
+    router.Intent.DOCUMENT, router.Intent.VAT_POSITION,
+})
+
+
+def _is_tabular(computed: router.Answer) -> bool:
+    return computed.intent in TABULAR_INTENTS or "\n" in computed.text
+
+
 def _history(messages: list[dict[str, str]]) -> list[dict[str, str]]:
     """The last few turns, excluding the current question."""
     return [m for m in messages if m.get("role") in ("user", "assistant")][-HISTORY_TURNS:]
@@ -293,7 +316,7 @@ def answer(
         # Measured: the model turned "this panel covers Zeynep, ask on Canan's page"
         # into "that information is not in the invoices", which is a different and
         # false claim. Returned unchanged, the same way capabilities() is.
-        if computed.verbatim or not use_llm:
+        if computed.verbatim or not use_llm or _is_tabular(computed):
             return AgentReply(computed.text, "router", computed.intent.value,
                               facts=computed.text)
         try:
