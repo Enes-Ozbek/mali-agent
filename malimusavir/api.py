@@ -604,8 +604,14 @@ class JournalRejection(BaseModel):
     reason: str
 
 
+class JournalNote(BaseModel):
+    invoice_no: str
+    note: str
+
+
 class JournalOut(BaseModel):
-    """A journal preview: what would post, and what would not."""
+    """A journal preview: what would post, what would not, and what was posted
+    somewhere other than the plain default."""
 
     entry_count: int
     line_count: int
@@ -613,6 +619,9 @@ class JournalOut(BaseModel):
     total_credit: float
     balanced: bool
     rejected: list[JournalRejection]
+    #: Currently only capitalisation. Shown because moving a purchase to 255 is a
+    #: decision an accountant should see rather than find in the ledger.
+    notes: list[JournalNote] = []
 
 
 def _overrides(conn: Connection) -> dict[str, str]:
@@ -639,6 +648,7 @@ def get_journal(client: str | None = None, year: int | None = None,
         balanced=abs(report.total_debit - report.total_credit) <= hesap.TOLERANCE,
         rejected=[JournalRejection(invoice_no=no, reason=why)
                   for no, why in report.rejected],
+        notes=[JournalNote(invoice_no=no, note=note) for no, note in report.noted],
     )
 
 

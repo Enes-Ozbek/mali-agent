@@ -138,9 +138,48 @@ def test_a_missing_base_is_derived_rather_than_refused(conn):
 
 def test_expenses_default_to_770(conn):
     """Where the great majority of a small taxpayer's costs belong."""
-    assert hesap.expense_account("telekom") == "770"
-    assert hesap.expense_account(None) == "770"
-    assert hesap.expense_account("bilinmeyen-kategori") == "770"
+    assert hesap.expense_account("telekom")[0] == "770"
+    assert hesap.expense_account(None)[0] == "770"
+    assert hesap.expense_account("bilinmeyen-kategori")[0] == "770"
+
+
+def test_a_large_equipment_purchase_is_capitalised_not_expensed(conn):
+    """VUK md. 313: above the annual limit a fixed asset is depreciated, not written
+    off in one year. Getting this wrong is an error a tax inspection finds."""
+    account, note = hesap.expense_account("elektronik", net=40000.0)
+    assert account == "255"
+    assert "demirbaş" in note
+
+
+def test_a_small_equipment_purchase_is_expensed_directly(conn):
+    """Below the limit it may be written off, which is what most purchases are."""
+    account, note = hesap.expense_account("elektronik", net=5000.0)
+    assert (account, note) == ("770", None)
+
+
+def test_the_limit_is_the_2026_figure_excluding_vat(conn):
+    assert hesap.CAPITALISATION_LIMIT == 12_000.0
+    assert hesap.expense_account("elektronik", net=12_000.0)[0] == "770"
+    assert hesap.expense_account("elektronik", net=12_000.01)[0] == "255"
+
+
+def test_the_limit_does_not_apply_outside_equipment_categories(conn):
+    """A 50.000 TL consultancy invoice is still 770 -- it is not a fixed asset."""
+    assert hesap.expense_account("hizmet", net=50000.0)[0] == "770"
+
+
+def test_an_explicit_override_beats_capitalisation(conn):
+    """The operator's stated intent wins over the default rule."""
+    assert hesap.expense_account("elektronik", {"elektronik": "153"}, 40000.0)[0] == "153"
+
+
+def test_a_capitalised_entry_carries_a_note_and_still_balances(conn):
+    add(conn, "K1", direction="alis", net=40000.0, tax=8000.0, category="elektronik")
+    report = hesap.journal(conn)
+    entry = report.entries[0]
+    assert [l.account for l in entry.lines] == ["255", "191", "320"]
+    assert entry.balanced
+    assert report.noted == [("K1", entry.note)]
 
 
 def test_an_override_moves_a_category_to_another_account(conn):
@@ -154,7 +193,7 @@ def test_an_override_moves_a_category_to_another_account(conn):
 
 def test_an_override_to_an_unknown_account_is_ignored(conn):
     """A typo in configuration must not invent an account number."""
-    assert hesap.expense_account("market", {"market": "999"}) == "770"
+    assert hesap.expense_account("market", {"market": "999"})[0] == "770"
 
 
 # --- scoping and export -------------------------------------------------------------------

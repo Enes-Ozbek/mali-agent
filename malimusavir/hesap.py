@@ -38,6 +38,7 @@ ACCOUNTS: dict[str, str] = {
     "120": "Alıcılar",
     "153": "Ticari Mallar",
     "191": "İndirilecek KDV",
+    "255": "Demirbaşlar",
     "320": "Satıcılar",
     "360": "Ödenecek Vergi ve Fonlar",
     "391": "Hesaplanan KDV",
@@ -59,7 +60,36 @@ DEFAULT_EXPENSE = "770"
 #: Expense accounts an operator may legitimately choose between. Deliberately short:
 #: offering the whole plan invites a wrong pick, and these are the ones that actually
 #: differ for a small taxpayer.
-EXPENSE_CHOICES = ("770", "760", "740", "153")
+EXPENSE_CHOICES = ("770", "760", "740", "153", "255")
+
+FIXED_ASSET = "255"
+
+#: VUK md. 313: a fixed asset costing more than this, KDV hariç, cannot be written off
+#: in the year it was bought -- it is capitalised to 255 Demirbaşlar and depreciated
+#: over its useful life. 12.000 TL for 2026, and it is re-set annually, so it lives here
+#: as one named constant rather than buried in a comparison.
+CAPITALISATION_LIMIT = 12_000.0
+
+#: Categories whose purchases can actually *be* fixed assets. The limit is meaningless
+#: outside them: a 50.000 TL consultancy invoice is still 770, not equipment.
+CAPITALISABLE = frozenset({"elektronik", "ofis"})
+
+#: Where each category posts by default.
+#:
+#: Almost everything is 770, and that is the honest answer rather than a lazy one: for a
+#: şahıs or small Ltd the overwhelming majority of costs really are genel yönetim
+#: giderleri. The accounts that differ -- 153 for goods bought to resell, 760 for
+#: marketing, 740 for the direct cost of services sold -- depend on what the business
+#: does, not on what the invoice says, so they are left to an explicit override.
+#:
+#: The one place a default earns its keep is capitalisation, which is a rule rather than
+#: a preference: see CAPITALISATION_LIMIT.
+DEFAULT_CATEGORY_ACCOUNTS: dict[str, str] = {
+    "telekom": "770", "enerji": "770", "abonelik": "770", "ofis": "770",
+    "sigorta": "770", "sağlık": "770", "kitap-medya": "770", "ev": "770",
+    "hizmet": "770", "market": "770", "yeme-içme": "770", "giyim": "770",
+    "ulaşım": "770", "elektronik": "770", "diğer": "770",
+}
 
 #: A kuruş. Anything past this is a real imbalance, not float noise.
 TOLERANCE = 0.01
@@ -85,6 +115,10 @@ class Entry:
     vendor: str | None
     direction: str
     lines: list[Line] = field(default_factory=list)
+    #: Set when the posting was not the plain default -- currently only capitalisation.
+    #: Surfaced in the preview so an accountant sees the decision rather than
+    #: discovering it in the ledger.
+    note: str | None = None
 
     @property
     def debit_total(self) -> float:
@@ -106,6 +140,11 @@ class JournalReport:
     rejected: list[tuple[str, str]] = field(default_factory=list)
 
     @property
+    def noted(self) -> list[tuple[str, str]]:
+        """(invoice_no, note) for entries posted somewhere other than the default."""
+        return [(e.invoice_no, e.note) for e in self.entries if e.note]
+
+    @property
     def total_debit(self) -> float:
         return round(sum(e.debit_total for e in self.entries), 2)
 
@@ -114,19 +153,33 @@ class JournalReport:
         return round(sum(e.credit_total for e in self.entries), 2)
 
 
-def expense_account(category: str | None, overrides: dict[str, str] | None = None) -> str:
-    """Which expense account a purchase belongs to.
+def expense_account(category: str | None, overrides: dict[str, str] | None = None,
+                    net: float | None = None) -> tuple[str, str | None]:
+    """Which account a purchase belongs to, and a note when the choice is worth seeing.
 
-    Defaults to 770 for everything. Whether a cost is really 153 or 760 depends on the
-    business, not on the invoice text, so it comes from an explicit per-category
-    override rather than a keyword guess -- guessing here misposts silently and the
-    error only shows up at the year end.
+    Three steps, most specific first:
+
+    1. An explicit override for the category always wins -- whether a cost is really
+       153 or 760 depends on the business rather than the invoice text, so it is stated
+       rather than inferred.
+    2. Otherwise, a purchase in a category that *can* be equipment and costs more than
+       the VUK limit is capitalised to 255 rather than expensed. This one is a rule, not
+       a preference: writing a 40.000 TL machine off in one year is an error a tax
+       inspection finds, so the default has to get it right and say that it did.
+    3. Otherwise the category default, which is 770 for everything.
     """
     if overrides and category and category in overrides:
         account = overrides[category]
         if account in ACCOUNTS:
-            return account
-    return DEFAULT_EXPENSE
+            return account, None
+
+    if (category in CAPITALISABLE and net is not None
+            and net > CAPITALISATION_LIMIT):
+        return FIXED_ASSET, (
+            f"{_tr_amount(net)} TL > {_tr_amount(CAPITALISATION_LIMIT)} TL "
+            f"amortisman sınırı — demirbaş olarak kaydedildi")
+
+    return DEFAULT_CATEGORY_ACCOUNTS.get(category or "", DEFAULT_EXPENSE), None
 
 
 def entry_for(invoice: sqlite3.Row | dict,
@@ -159,7 +212,8 @@ def entry_for(invoice: sqlite3.Row | dict,
         if tax:
             entry.lines.append(Line(OUTPUT_VAT, ACCOUNTS[OUTPUT_VAT], credit=tax))
     else:
-        account = expense_account(row.get("category"), overrides)
+        account, note = expense_account(row.get("category"), overrides, net)
+        entry.note = note
         entry.lines.append(Line(account, ACCOUNTS[account], debit=net))
         if tax:
             entry.lines.append(Line(INPUT_VAT, ACCOUNTS[INPUT_VAT], debit=tax))

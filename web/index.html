@@ -1193,10 +1193,12 @@ class Component extends DCLogic {
         const j = st.journal;
         if (!j) return '';
         const rejected = (j.rejected || []).length;
-        // The refusals lead: they are the part that needs a person.
-        return rejected
-          ? `${j.entry_count} fiş · ${rejected} fatura aktarılamıyor`
-          : `${j.entry_count} fiş · ${j.line_count} satır`;
+        const notes = (j.notes || []).length;
+        // Refusals lead: they are the part that needs a person. Capitalisation is
+        // worth surfacing too -- moving a purchase to 255 changes the year's profit.
+        if (rejected) return `${j.entry_count} fiş · ${rejected} fatura aktarılamıyor`;
+        if (notes) return `${j.entry_count} fiş · ${notes} demirbaş (255)`;
+        return `${j.entry_count} fiş · ${j.line_count} satır`;
       })(),
 
       isGenel: !isDosyalar, isDosyalar,
