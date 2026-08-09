@@ -34,13 +34,18 @@ class FoundryError(RuntimeError):
     """Foundry Local is unreachable, or a requested model is not loaded."""
 
 
-@functools.lru_cache(maxsize=1)
-def discover_endpoint() -> str:
-    """Return the base URL Foundry Local is listening on."""
-    override = os.environ.get("FOUNDRY_LOCAL_ENDPOINT")
-    if override:
-        return override.rstrip("/")
+#: Last endpoint the CLI actually reported. Only a *successful* discovery is remembered.
+#:
+#: This was an lru_cache, which is the bug it exists to fix: with Foundry stopped the
+#: first call fell back to DEFAULT_ENDPOINT and that answer was cached for the life of
+#: the process. Starting Foundry afterwards changed nothing -- every later request kept
+#: reporting "cannot reach 5267" while the server sat on a different port -- and the
+#: only cure was restarting the app.
+_ENDPOINT: str | None = None
 
+
+def _probe_endpoint() -> str | None:
+    """Ask the CLI where the server is listening, or None if it is not."""
     try:
         proc = subprocess.run(
             ["foundry", "-o", "json", "server", "status"],
@@ -58,24 +63,95 @@ def discover_endpoint() -> str:
         if status.get("running") and urls:
             return str(urls[0]).rstrip("/")
     except (OSError, subprocess.SubprocessError, json.JSONDecodeError, ValueError):
-        pass  # fall through to the default; the health check below gives a better error
+        pass
+    return None
 
+
+def discover_endpoint(*, refresh: bool = False) -> str:
+    """The base URL Foundry Local is listening on.
+
+    Foundry binds a dynamic port, so this is discovered rather than assumed. A failed
+    probe returns the documented default *without* remembering it, so the next call
+    tries again -- which is what lets the app recover when the server is started after
+    it is.
+    """
+    global _ENDPOINT
+
+    override = os.environ.get("FOUNDRY_LOCAL_ENDPOINT")
+    if override:
+        return override.rstrip("/")
+    if _ENDPOINT and not refresh:
+        return _ENDPOINT
+
+    found = _probe_endpoint()
+    if found:
+        _ENDPOINT = found
+        return found
     return DEFAULT_ENDPOINT
 
 
-@functools.lru_cache(maxsize=1)
-def get_client() -> OpenAI:
-    """An OpenAI client pointed at the local Foundry server. The key is unused."""
-    return OpenAI(base_url=f"{discover_endpoint()}/v1", api_key="not-needed", timeout=600.0)
+def ensure_server(*, timeout: int = 180) -> str | None:
+    """Start Foundry Local if it is not already up. Returns the endpoint, or None.
 
+    `foundry server start` is idempotent and returns immediately when the server is
+    already running, so this is safe to call on every launch. Never raises: the app is
+    fully usable without a model -- Hızlı mode, the ledger, the deadline board and the
+    export are all pure SQL -- so a failure here degrades the assistant rather than
+    stopping the program.
+    """
+    if os.environ.get("FOUNDRY_LOCAL_ENDPOINT"):
+        return discover_endpoint()
 
-@functools.lru_cache(maxsize=1)
-def _loaded_model_ids() -> tuple[str, ...]:
+    existing = _probe_endpoint()
+    if existing:
+        return existing
+
     try:
-        return tuple(m.id for m in get_client().models.list().data)
+        subprocess.run(
+            ["foundry", "server", "start"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout, shell=(os.name == "nt"),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    return discover_endpoint(refresh=True) if _probe_endpoint() else None
+
+
+@functools.lru_cache(maxsize=4)
+def _client_for(base: str) -> OpenAI:
+    return OpenAI(base_url=f"{base}/v1", api_key="not-needed", timeout=600.0)
+
+
+def get_client() -> OpenAI:
+    """An OpenAI client pointed at the local Foundry server. The key is unused.
+
+    Keyed on the endpoint rather than cached outright: when discovery finally succeeds
+    the client has to follow it to the new port instead of holding the stale one.
+    """
+    return _client_for(discover_endpoint())
+
+
+@functools.lru_cache(maxsize=4)
+def _model_ids_at(base: str) -> tuple[str, ...]:
+    return tuple(m.id for m in _client_for(base).models.list().data)
+
+
+def _loaded_model_ids() -> tuple[str, ...]:
+    base = discover_endpoint()
+    try:
+        return _model_ids_at(base)
+    except Exception:  # noqa: BLE001 - retried once against a fresh probe
+        pass
+
+    # The port may have moved, or the server may have come up since. One re-probe
+    # before giving up turns "restart the app" into "it just works".
+    retry = discover_endpoint(refresh=True)
+    try:
+        return _model_ids_at(retry)
     except Exception as exc:  # noqa: BLE001 - surfaced as a single actionable message
         raise FoundryError(
-            f"Cannot reach Foundry Local at {discover_endpoint()}. "
+            f"Cannot reach Foundry Local at {retry}. "
             "Start it with:  foundry server start"
         ) from exc
 

@@ -25,6 +25,7 @@ from enum import Enum
 import pandas as pd
 
 from . import stats
+from .clients import PURCHASE
 from .normalize import fold_tr, format_tr_amount
 
 MONTHS = {
@@ -101,11 +102,17 @@ INTENT_PATTERNS: tuple[tuple[Intent, tuple[str, ...]], ...] = (
 
 #: Phrases that ask for a listing rather than a figure.
 _LIST_MARKERS = ("hangi faturalar", "faturalari listele", "faturalarimi goster",
-                 "hangilerinde", "listele", "goster")
+                 "hangilerinde", "listele", "goster", "getir", "bul ", "bulur musun")
 
 #: Words that make a listing request unambiguously about invoices, so "faturaları
 #: listele" is an aggregate even with no vendor or category to filter on.
 _INVOICE_WORDS = ("fatura", "belge", "kayit")
+
+#: "Gider faturası" and "gelir faturası" are the distinction an accountant draws most
+#: often, and direction is already on every row -- so a question that names one is
+#: filtered to it rather than answered with both.
+_SALE_WORDS = ("gelir fatura", "satis fatura", "kestigi fatura", "kesilen fatura")
+_PURCHASE_WORDS = ("gider fatura", "alis fatura", "alinan fatura", "masraf fatura")
 
 #: Phrases asking what is *inside* invoices rather than which invoices exist. Only
 #: line-item search can answer these, so they stay semantic even when the sentence also
@@ -140,6 +147,8 @@ class Question:
     #: Clients named *in the question*, e.g. "canan aydının kaç faturası var". Distinct
     #: from the client_id passed to answer(), which is the page the user is on.
     clients: list[ClientRef] = field(default_factory=list)
+    #: "satis" / "alis" when the question says which side it means, else None.
+    direction: str | None = None
 
     @property
     def is_aggregate(self) -> bool:
@@ -155,6 +164,9 @@ class Question:
                 v[:28] for v in self.vendors))
         if self.category:
             parts.append(f"{self.category} kategorisi")
+        if self.direction:
+            parts.append("gelir faturaları" if self.direction == "satis"
+                         else "gider faturaları")
         if self.since or self.until:
             parts.append(f"{self.since or '...'} - {self.until or '...'}")
         return parts
@@ -243,6 +255,17 @@ def known_clients(conn: sqlite3.Connection) -> list[ClientRef]:
             tokens=_client_tokens(f"{row['name']} {row['display'] or ''}"),
         ))
     return out
+
+
+def _match_direction(folded_question: str) -> str | None:
+    """"satis" / "alis" when the question names one side of the ledger."""
+    from .clients import PURCHASE, SALE
+
+    if any(word in folded_question for word in _SALE_WORDS):
+        return SALE
+    if any(word in folded_question for word in _PURCHASE_WORDS):
+        return PURCHASE
+    return None
 
 
 def _match_clients(folded_question: str, clients: list[ClientRef]) -> list[ClientRef]:
@@ -383,6 +406,7 @@ def classify(question: str, *, vendors: list[str] | None = None,
     matched_clients = _match_clients(folded, clients or [])
     category = _match_category(folded, categories or [])
     since, until = _match_period(folded, today)
+    direction = _match_direction(folded)
 
     # A client's own name is also the seller on their sales invoices, so "Zeynep
     # Çelik'in kaç faturası var" matches both a client and a vendor. Naming a client
@@ -397,7 +421,7 @@ def classify(question: str, *, vendors: list[str] | None = None,
         for phrase in phrases:
             if phrase in folded:
                 return Question(intent, question, matched_vendors, category,
-                                since, until, phrase, matched_clients)
+                                since, until, phrase, matched_clients, direction)
 
     # A listing request counts as an aggregate when it names something to filter on, or
     # when it says outright that invoices are what should be listed ("faturaları
@@ -408,10 +432,10 @@ def classify(question: str, *, vendors: list[str] | None = None,
             matched_vendors or category or matched_clients
             or any(w in folded for w in _INVOICE_WORDS)):
         return Question(Intent.LIST, question, matched_vendors, category,
-                        since, until, "liste", matched_clients)
+                        since, until, "liste", matched_clients, direction)
 
     return Question(Intent.SEMANTIC, question, matched_vendors, category, since, until,
-                    None, matched_clients)
+                    None, matched_clients, direction)
 
 
 def _filtered(conn: sqlite3.Connection, parsed: Question,
@@ -424,6 +448,8 @@ def _filtered(conn: sqlite3.Connection, parsed: Question,
         frame = frame[frame["vendor"].isin(parsed.vendors)]
     if parsed.category:
         frame = frame[frame["category"] == parsed.category]
+    if parsed.direction:
+        frame = frame[frame["direction"].fillna(PURCHASE) == parsed.direction]
     return frame
 
 

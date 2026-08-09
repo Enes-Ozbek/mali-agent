@@ -340,3 +340,87 @@ def test_a_missing_vendor_name_is_not_printed_as_none(practice):
     text = router.route(connection, "faturaları listele").text
     assert "None" not in text
     assert "okunamadı" in text
+
+
+# --- "gider faturası" vs "gelir faturası" ---------------------------------------------
+#
+# The distinction an accountant draws most often, and direction is already on every row.
+# Reported from the live app: "zirve lojistiğin gider faturasını getir" answered
+# "bu soruyu faturalarınızdan yanıtlayamam" -- "getir" was not a listing word, and even
+# once it routed, both sides of the ledger came back together.
+
+
+@pytest.fixture
+def ledger(tmp_path):
+    """One client with invoices on both sides."""
+    from malimusavir import clients as clients_mod
+
+    connection = db.connect(tmp_path / "direction.db")
+    zirve = clients_mod.resolve(connection, "1020304050 - Zirve Lojistik")
+    clients_mod.set_metadata(connection, zirve.id, display="Zirve Lojistik A.Ş.",
+                             tax_id="1020304050")
+
+    def add(no, direction, total, vendor):
+        invoice = ExtractedInvoice(
+            invoice_no=no, date="2026-01-10", vendor=vendor, vendor_tax_id="9",
+            total_amount=total, tax_amount=round(total / 6, 2),
+            net_amount=round(total * 5 / 6, 2), category="hizmet", currency="TL",
+            content_hash=f"h-{no}", profile="test",
+        )
+        invoice.client_id, invoice.doc_year, invoice.doc_month = zirve.id, 2026, 1
+        invoice.direction = direction
+        db.upsert_invoice(connection, invoice)
+
+    add("G1", "alis", 51000.0, "Marmara Akaryakıt")
+    add("G2", "alis", 21600.0, "Lastik ve Bakım Ltd.")
+    add("S1", "satis", 90000.0, "Zirve Lojistik A.Ş.")
+    yield connection, zirve.id
+    connection.close()
+
+
+def test_gider_faturasi_returns_only_purchases(ledger):
+    """The reported question, verbatim."""
+    conn, _ = ledger
+    answer = router.route(conn, "zirve lojistiğin gider faturasını getir")
+    assert answer is not None
+    assert answer.intent is Intent.LIST
+    assert "2 fatura" in answer.text
+    assert "gider faturaları" in answer.text
+    assert "90.000,00" not in answer.text        # the sale must not appear
+
+
+def test_gelir_faturasi_returns_only_sales(ledger):
+    conn, _ = ledger
+    text = router.route(conn, "zirve lojistiğin gelir faturalarını getir").text
+    assert "1 fatura" in text
+    assert "90.000,00" in text
+    assert "51.000,00" not in text
+
+
+def test_without_a_side_named_both_are_returned(ledger):
+    conn, _ = ledger
+    text = router.route(conn, "zirve lojistiğin faturalarını listele").text
+    assert "3 fatura" in text
+
+
+@pytest.mark.parametrize("phrase", ["getir", "listele", "göster", "bul bakalım"])
+def test_several_ways_of_asking_for_a_listing(ledger, phrase):
+    """"getir" is the natural word and was missing, which is what made the reported
+    question fall through to semantic search."""
+    conn, _ = ledger
+    answer = router.route(conn, f"zirve lojistiğin faturalarını {phrase}")
+    assert answer is not None and answer.intent is Intent.LIST
+
+
+def test_the_direction_is_named_in_the_answer(ledger):
+    """The scope a figure was computed under travels with it, the same as the client."""
+    conn, _ = ledger
+    assert "gider faturaları" in router.route(conn, "gider faturalarını listele").text
+    assert "gelir faturaları" in router.route(conn, "gelir faturalarını listele").text
+
+
+def test_direction_narrows_a_total_too(ledger):
+    """Not only listings -- any aggregate that names a side should respect it."""
+    conn, _ = ledger
+    text = router.route(conn, "gider faturaları toplam ne kadar").text
+    assert "72.600,00" in text        # 51.000 + 21.600, the sale excluded

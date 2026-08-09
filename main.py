@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import argparse
+import threading
+import webbrowser
 import sys
 from pathlib import Path
 
@@ -282,10 +284,24 @@ def cmd_clients(args) -> int:
 def cmd_serve(args) -> int:
     import uvicorn
 
-    from malimusavir import api
+    from malimusavir import api, foundry
 
     api.DB_PATH = args.db
+
+    # Bring the model server up with the app. Everything except the assistant is pure
+    # SQL, so this is a convenience rather than a requirement -- a failure here prints
+    # a note and the dashboard still works, in Hızlı mode.
+    if not args.no_model:
+        print("Foundry Local başlatılıyor…", flush=True)
+        endpoint = foundry.ensure_server()
+        print(f"  {endpoint}" if endpoint else
+              "  başlatılamadı — panel çalışır, yalnızca AI modu devre dışı", flush=True)
+
     print(f"Mali Müşavir -- http://127.0.0.1:{args.port}  (Ctrl+C to stop)")
+    if args.open_browser:
+        # After the message, so the URL is on screen even if the browser misbehaves.
+        threading.Timer(1.5, webbrowser.open,
+                        (f"http://127.0.0.1:{args.port}",)).start()
     uvicorn.run(api.app, host="127.0.0.1", port=args.port, log_level="warning")
     return 0
 
@@ -312,6 +328,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--client", metavar="NAME", default=None,
                         help="With --ingest: file everything under this client. "
                              "With --ingest-archive: limit to this one client.")
+    parser.add_argument("--no-model", action="store_true",
+                        help="With --serve: skip starting Foundry Local")
+    parser.add_argument("--open-browser", action="store_true",
+                        help="With --serve: open the dashboard once the server is up")
     parser.add_argument("--port", type=int, default=8000,
                         help="With --serve: port to listen on")
     parser.add_argument("--dry-run", action="store_true",
