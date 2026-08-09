@@ -29,6 +29,7 @@ import sqlite3
 from dataclasses import dataclass, field
 
 from .clients import SALE
+from .normalize import fold_tr
 
 #: Tekdüzen Hesap Planı, the accounts an invoice can touch. Names are the official
 #: ones -- a ledger import matching on description needs them spelled as the plan does.
@@ -153,28 +154,65 @@ class JournalReport:
         return round(sum(e.credit_total for e in self.entries), 2)
 
 
+def vendor_rules(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT tax_id, name_key, account, label FROM vendor_rules").fetchall()
+
+
+def match_rule(rules, tax_id: str | None, vendor: str | None) -> str | None:
+    """The account a supplier rule says to use, if one applies.
+
+    Tax id first: it is the stable identifier, and a rule keyed on it keeps working
+    when the seller's name arrives spelled differently on the next invoice.
+    """
+    digits = "".join(ch for ch in (tax_id or "") if ch.isdigit())
+    if digits:
+        for rule in rules:
+            if rule["tax_id"] and rule["tax_id"] == digits:
+                return rule["account"]
+
+    key = fold_tr(vendor or "").strip()
+    if key:
+        for rule in rules:
+            if rule["name_key"] and rule["name_key"] == key:
+                return rule["account"]
+    return None
+
+
 def expense_account(category: str | None, overrides: dict[str, str] | None = None,
-                    net: float | None = None) -> tuple[str, str | None]:
+                    net: float | None = None,
+                    rule_account: str | None = None) -> tuple[str, str | None]:
     """Which account a purchase belongs to, and a note when the choice is worth seeing.
 
-    Three steps, most specific first:
+    Most specific first:
 
-    1. An explicit override for the category always wins -- whether a cost is really
-       153 or 760 depends on the business rather than the invoice text, so it is stated
-       rather than inferred.
-    2. Otherwise, a purchase in a category that *can* be equipment and costs more than
-       the VUK limit is capitalised to 255 rather than expensed. This one is a rule, not
-       a preference: writing a 40.000 TL machine off in one year is an error a tax
-       inspection finds, so the default has to get it right and say that it did.
-    3. Otherwise the category default, which is 770 for everything.
+    1. A supplier rule. A category is a guess about a kind of spend; a supplier is a
+       fact about a counterparty, so it wins.
+    2. An explicit category override -- whether a cost is really 153 or 760 depends on
+       the business rather than the invoice text, so it is stated rather than inferred.
+    3. Otherwise, a purchase in a category that *can* be equipment and costs more than
+       the VUK limit is capitalised to 255. A rule, not a preference: writing a 40.000
+       TL machine off in one year is an error a tax inspection finds.
+    4. Otherwise the category default, which is 770 for everything.
+
+    Where an operator has stated an account and the amount crosses the capitalisation
+    limit anyway, their instruction stands and a note is raised instead. They are the
+    professional; silently overriding them would be worse than flagging it. But letting
+    a stale rule expense a fixed asset without a word would be worse still.
     """
-    if overrides and category and category in overrides:
-        account = overrides[category]
-        if account in ACCOUNTS:
-            return account, None
+    over_limit = net is not None and net > CAPITALISATION_LIMIT
+    stated = rule_account if rule_account in ACCOUNTS else None
+    if stated is None and overrides and category and category in overrides:
+        stated = overrides[category] if overrides[category] in ACCOUNTS else None
 
-    if (category in CAPITALISABLE and net is not None
-            and net > CAPITALISATION_LIMIT):
+    if stated is not None:
+        if over_limit and stated != FIXED_ASSET and category in CAPITALISABLE:
+            return stated, (
+                f"{_tr_amount(net)} TL amortisman sınırının üzerinde — "
+                f"demirbaş (255) olmalı mı, kontrol edin")
+        return stated, None
+
+    if category in CAPITALISABLE and over_limit:
         return FIXED_ASSET, (
             f"{_tr_amount(net)} TL > {_tr_amount(CAPITALISATION_LIMIT)} TL "
             f"amortisman sınırı — demirbaş olarak kaydedildi")
@@ -183,7 +221,8 @@ def expense_account(category: str | None, overrides: dict[str, str] | None = Non
 
 
 def entry_for(invoice: sqlite3.Row | dict,
-              overrides: dict[str, str] | None = None) -> Entry | str:
+              overrides: dict[str, str] | None = None,
+              rules=()) -> Entry | str:
     """Build the journal entry for one invoice, or return why it cannot be built."""
     row = dict(invoice)
     net, tax, total = row.get("net_amount"), row.get("tax_amount"), row.get("total_amount")
@@ -212,7 +251,9 @@ def entry_for(invoice: sqlite3.Row | dict,
         if tax:
             entry.lines.append(Line(OUTPUT_VAT, ACCOUNTS[OUTPUT_VAT], credit=tax))
     else:
-        account, note = expense_account(row.get("category"), overrides, net)
+        rule_account = match_rule(rules, row.get("vendor_tax_id"), row.get("vendor"))
+        account, note = expense_account(row.get("category"), overrides, net,
+                                        rule_account)
         entry.note = note
         entry.lines.append(Line(account, ACCOUNTS[account], debit=net))
         if tax:
@@ -249,21 +290,84 @@ def journal(conn: sqlite3.Connection, *, client_id: int | str | None = None,
         where.append("doc_month = ?")
         params.append(int(month))
 
-    sql = ("SELECT id, invoice_no, date, vendor, category, direction, "
+    sql = ("SELECT id, invoice_no, date, vendor, vendor_tax_id, category, direction, "
            "       net_amount, tax_amount, total_amount, needs_review "
            "FROM invoices")
     if where:
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY date, invoice_no"
 
+    rules = vendor_rules(conn)
     report = JournalReport()
     for row in conn.execute(sql, params):
-        built = entry_for(row, overrides)
+        built = entry_for(row, overrides, rules)
         if isinstance(built, str):
             report.rejected.append((row["invoice_no"] or "?", built))
             continue
         report.entries.append(built)
     return report
+
+
+@dataclass
+class RuleSuggestion:
+    """A supplier seen often enough to be worth deciding about once."""
+
+    tax_id: str | None
+    name_key: str | None
+    label: str
+    invoices: int
+    total: float
+    current_account: str      #: where it posts today, without a rule
+
+
+#: A supplier billing at least this often is a recurring relationship rather than a
+#: one-off, and worth the operator spending ten seconds on. Below it the rule would
+#: cost more attention than it saves.
+SUGGEST_MIN_INVOICES = 2
+
+
+def suggest_rules(conn: sqlite3.Connection, *, client_id: int | str | None = None,
+                  limit: int = 20) -> list[RuleSuggestion]:
+    """Suppliers that recur and have no rule yet, busiest first.
+
+    Only purchases: a sale posts to 600 regardless of who the customer is, so a rule
+    there would never change anything.
+    """
+    from . import stats
+
+    clauses, params = ["COALESCE(direction, 'alis') != 'satis'"], []
+    if client_id == stats.UNASSIGNED:
+        clauses.append("client_id IS NULL")
+    elif client_id is not None:
+        clauses.append("client_id = ?")
+        params.append(int(client_id))
+
+    rows = conn.execute(
+        "SELECT vendor_tax_id, vendor, category, COUNT(*) n, "
+        "       COALESCE(SUM(total_amount), 0) total "
+        "FROM invoices WHERE " + " AND ".join(clauses) +
+        " GROUP BY COALESCE(vendor_tax_id, ''), COALESCE(vendor, '') "
+        " ORDER BY n DESC, total DESC", params).fetchall()
+
+    existing = vendor_rules(conn)
+    out: list[RuleSuggestion] = []
+    for row in rows:
+        if row["n"] < SUGGEST_MIN_INVOICES:
+            continue
+        if match_rule(existing, row["vendor_tax_id"], row["vendor"]) is not None:
+            continue          # already decided
+        digits = "".join(ch for ch in (row["vendor_tax_id"] or "") if ch.isdigit())
+        label = row["vendor"] or (digits and f"VKN {digits}") or "(satıcı adı okunamadı)"
+        account, _ = expense_account(row["category"])
+        out.append(RuleSuggestion(
+            tax_id=digits or None,
+            name_key=None if digits else (fold_tr(row["vendor"] or "").strip() or None),
+            label=label, invoices=row["n"], total=float(row["total"]),
+            current_account=account,
+        ))
+        if len(out) >= limit:
+            break
+    return [s for s in out if s.tax_id or s.name_key]
 
 
 #: Header of the exported file. Column names are the ones a Turkish ledger import

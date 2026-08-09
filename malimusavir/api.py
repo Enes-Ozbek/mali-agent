@@ -15,7 +15,7 @@ import os
 import subprocess
 import sys
 import tempfile
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from sqlite3 import Connection
 
@@ -669,6 +669,114 @@ def get_journal_csv(client: str | None = None, year: int | None = None,
         content=body, media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{name}"'},
     )
+
+
+class VendorRuleRow(BaseModel):
+    tax_id: str | None = None
+    name_key: str | None = None
+    account: str
+    account_name: str
+    label: str | None = None
+
+
+class VendorRuleIn(BaseModel):
+    account: str
+    tax_id: str | None = None
+    name_key: str | None = None
+    label: str | None = None
+
+
+class RuleSuggestionRow(BaseModel):
+    tax_id: str | None = None
+    name_key: str | None = None
+    label: str
+    invoices: int
+    total: float
+    current_account: str
+
+
+class HesapPlanOut(BaseModel):
+    """Everything that decides where a purchase posts."""
+
+    accounts: dict[str, str]
+    expense_choices: list[str]
+    category_defaults: dict[str, str]
+    overrides: dict[str, str]
+    rules: list[VendorRuleRow]
+    suggestions: list[RuleSuggestionRow]
+    capitalisation_limit: float
+
+
+@app.get("/api/hesap-plan", response_model=HesapPlanOut)
+def get_hesap_plan(client: str | None = None, conn: Connection = Depends(get_conn)):
+    """The account mapping, and the suppliers worth deciding about."""
+    rules = [
+        VendorRuleRow(tax_id=r["tax_id"], name_key=r["name_key"], account=r["account"],
+                      account_name=hesap.ACCOUNTS.get(r["account"], "?"),
+                      label=r["label"])
+        for r in hesap.vendor_rules(conn)
+    ]
+    return HesapPlanOut(
+        accounts=hesap.ACCOUNTS,
+        expense_choices=list(hesap.EXPENSE_CHOICES),
+        category_defaults=hesap.DEFAULT_CATEGORY_ACCOUNTS,
+        overrides=_overrides(conn),
+        rules=rules,
+        suggestions=[RuleSuggestionRow(**vars(s))
+                     for s in hesap.suggest_rules(conn, client_id=_scope(client))],
+        capitalisation_limit=hesap.CAPITALISATION_LIMIT,
+    )
+
+
+@app.post("/api/vendor-rules", response_model=VendorRuleRow)
+def set_vendor_rule(payload: VendorRuleIn, conn: Connection = Depends(get_conn)):
+    """Create or replace a supplier rule."""
+    if payload.account not in hesap.ACCOUNTS:
+        raise HTTPException(400, f"bilinmeyen hesap kodu: {payload.account}")
+    tax_id = "".join(ch for ch in (payload.tax_id or "") if ch.isdigit()) or None
+    name_key = (payload.name_key or "").strip() or None
+    if not tax_id and not name_key:
+        raise HTTPException(400, "kural için VKN ya da satıcı adı gerekli")
+
+    conn.execute(
+        "INSERT INTO vendor_rules (tax_id, name_key, account, label, created_at) "
+        "VALUES (:tax_id, :name_key, :account, :label, :now) "
+        "ON CONFLICT (COALESCE(tax_id, ''), COALESCE(name_key, '')) "
+        "DO UPDATE SET account = :account, label = :label",
+        {"tax_id": tax_id, "name_key": name_key, "account": payload.account,
+         "label": payload.label,
+         "now": datetime.now(timezone.utc).isoformat(timespec="seconds")},
+    )
+    conn.commit()
+    return VendorRuleRow(tax_id=tax_id, name_key=name_key, account=payload.account,
+                         account_name=hesap.ACCOUNTS[payload.account],
+                         label=payload.label)
+
+
+@app.delete("/api/vendor-rules")
+def delete_vendor_rule(tax_id: str | None = None, name_key: str | None = None,
+                       conn: Connection = Depends(get_conn)):
+    cursor = conn.execute(
+        "DELETE FROM vendor_rules WHERE COALESCE(tax_id, '') = COALESCE(?, '') "
+        "AND COALESCE(name_key, '') = COALESCE(?, '')", (tax_id, name_key))
+    conn.commit()
+    if not cursor.rowcount:
+        raise HTTPException(404, "kural bulunamadı")
+    return {"deleted": cursor.rowcount}
+
+
+@app.post("/api/hesap-overrides")
+def set_category_override(category: str, account: str,
+                          conn: Connection = Depends(get_conn)):
+    """Point a whole category at a different account."""
+    if account not in hesap.ACCOUNTS:
+        raise HTTPException(400, f"bilinmeyen hesap kodu: {account}")
+    conn.execute(
+        "INSERT INTO hesap_overrides (category, account) VALUES (?, ?) "
+        "ON CONFLICT (category) DO UPDATE SET account = excluded.account",
+        (category, account))
+    conn.commit()
+    return {"category": category, "account": account}
 
 
 # ---- clients ----------------------------------------------------------------------

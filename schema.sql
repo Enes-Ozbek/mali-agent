@@ -120,3 +120,22 @@ CREATE TABLE IF NOT EXISTS hesap_overrides (
     category TEXT PRIMARY KEY,
     account  TEXT NOT NULL
 );
+
+
+-- "This supplier always posts here." The precise half of hesap kodu assignment: a
+-- category is a guess about a kind of spend, a supplier is a fact about a counterparty.
+--
+-- Keyed on the seller's VKN where there is one, because a tax number is stable while a
+-- name is not -- the same issuer arrives as "TURKCELL ILETISIM HIZMETLERI A.S." on one
+-- invoice and "Turkcell" on the next. name_key is the fallback for sellers whose tax id
+-- did not extract, folded so case and accents cannot fork one supplier into two rules.
+CREATE TABLE IF NOT EXISTS vendor_rules (
+    id         INTEGER PRIMARY KEY,
+    tax_id     TEXT,               -- seller VKN/TCKN, preferred key
+    name_key   TEXT,               -- fold_tr(vendor), used when tax_id is absent
+    account    TEXT NOT NULL,      -- Tekduzen code to post to
+    label      TEXT,               -- the seller name as the operator saw it
+    created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vendor_rules_key
+    ON vendor_rules (COALESCE(tax_id, ''), COALESCE(name_key, ''));

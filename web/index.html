@@ -42,6 +42,7 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 .agendanote{font-size:10px;opacity:.55;line-height:1.35;margin-top:1px}
 .pill{flex:none;font-size:9px;letter-spacing:.04em;text-transform:uppercase;
       padding:1px 6px;border-radius:9px;white-space:nowrap}
+.acctbtn{flex:none;font-size:10px;padding:2px 7px;font-variant-numeric:tabular-nums}
 .tnode{cursor:pointer;user-select:none}
 .tnode:hover{background:color-mix(in srgb, var(--color-accent) 10%, transparent)}
 .ok{color:var(--color-accent-700)}
@@ -245,6 +246,7 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 <span style="display:inline-flex;gap:2px;border:1px solid var(--color-divider);border-radius:4px;padding:1px">
 <button class="mode" style="font-size:10.5px;color:{{ genelColor }};box-shadow:{{ genelShadow }}" onClick="{{ setTabGenel }}">Genel Bakış</button>
 <button class="mode" style="font-size:10.5px;color:{{ dosyalarColor }};box-shadow:{{ dosyalarShadow }}" onClick="{{ setTabDosyalar }}">Dosyalar</button>
+<button class="mode" style="font-size:10.5px;color:{{ hesapColor }};box-shadow:{{ hesapShadow }}" onClick="{{ setTabHesap }}">Hesap Planı</button>
 </span>
 <span style="margin-left:auto;display:flex;align-items:center;gap:8px">
 <span class="num" style="font-size:10px;opacity:.55">{{ journalNote }}</span>
@@ -376,6 +378,44 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 </sc-if>
 </sc-if>
 </sc-if>
+
+<sc-if value="{{ isHesap }}" hint-placeholder-val="{{ false }}">
+<div style="padding:10px 14px 4px;flex:none">
+<div style="display:flex;align-items:baseline;gap:9px">
+<h4 style="margin:0">Hesap Planı</h4>
+<span style="font-size:10.5px;opacity:.55">{{ hesapNote }}</span>
+</div>
+</div>
+
+<sc-if value="{{ hasSuggestions }}" hint-placeholder-val="{{ true }}">
+<div style="padding:2px 14px 6px;font-size:10.5px;opacity:.6;line-height:1.45">Tekrar eden satıcılar. Bir kez seçin, sonraki faturalar aynı hesaba gitsin.</div>
+<sc-for list="{{ suggestionRows }}" as="s" hint-placeholder-count="4">
+<div class="krow" style="display:flex;align-items:center;gap:9px;padding:6px 14px;border-bottom:1px solid var(--color-divider);font-size:11.5px">
+<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ s.label }}</span>
+<span class="num" style="font-size:10px;opacity:.55;flex:none">{{ s.meta }}</span>
+<sc-for list="{{ s.choices }}" as="ch" hint-placeholder-count="5">
+<button class="mode acctbtn" style="color:{{ ch.color }};box-shadow:{{ ch.shadow }}" onClick="{{ ch.pick }}" title="{{ ch.title }}">{{ ch.code }}</button>
+</sc-for>
+</div>
+</sc-for>
+</sc-if>
+
+<sc-if value="{{ hasRules }}" hint-placeholder-val="{{ false }}">
+<div style="padding:12px 14px 4px;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-accent)">Tanımlı kurallar</div>
+<sc-for list="{{ ruleRows }}" as="r" hint-placeholder-count="2">
+<div class="krow" style="display:flex;align-items:center;gap:9px;padding:5px 14px;border-bottom:1px solid var(--color-divider);font-size:11.5px">
+<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.label }}</span>
+<span class="num" style="font-size:10px;opacity:.5">{{ r.key }}</span>
+<span class="pill" style="background:var(--color-accent-600);color:var(--color-bg)">{{ r.account }}</span>
+<span style="font-size:10.5px;opacity:.7;flex:none">{{ r.accountName }}</span>
+<button class="link" style="font-size:11px;flex:none" onClick="{{ r.remove }}" title="Kuralı sil">✕</button>
+</div>
+</sc-for>
+</sc-if>
+
+<div style="padding:12px 14px 4px;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-accent)">Varsayılanlar</div>
+<div style="padding:0 14px 10px;font-size:10.5px;opacity:.6;line-height:1.5">{{ defaultsNote }}</div>
+</sc-if>
 </div>
 
 </div>
@@ -469,7 +509,7 @@ class Component extends DCLogic {
     view: 'list', clientId: null, client: null, year: null, month: null,
     loading: true, search: '',
     clients: [], overview: null, sum: null, cats: [], months: [], recurring: [], ledger: [],
-    tahakkuklar: [], docs: [], vat: null, journal: null,
+    tahakkuklar: [], docs: [], vat: null, journal: null, plan: null,
     tree: [], openYears: [], openMonths: [], docType: null,
     preview: null,
     tab: 'genel', folder: null, fileStatus: '',
@@ -700,6 +740,44 @@ class Component extends DCLogic {
 
   setTabGenel = () => this.setState({ tab: 'genel', fileStatus: '' });
   setTabDosyalar = () => this.setState({ tab: 'dosyalar', folder: null, fileStatus: '' });
+  setTabHesap = async () => {
+    this.setState({ tab: 'hesap', fileStatus: '' });
+    await this.loadPlan();
+  };
+
+  async loadPlan() {
+    try {
+      const plan = await fetch(this.scoped('/api/hesap-plan')).then(r => r.json());
+      this.setState({ plan });
+    } catch (e) {
+      this.setState({ plan: null });
+    }
+  }
+
+  /** Decide once where a supplier posts; every later invoice follows. */
+  setRule = (suggestion, account) => async () => {
+    try {
+      await fetch('/api/vendor-rules', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          account, tax_id: suggestion.tax_id, name_key: suggestion.name_key,
+          label: suggestion.label
+        })
+      });
+      // The journal preview changes the moment a rule does, so both are refreshed.
+      await Promise.all([this.loadPlan(), this.loadClientData()]);
+    } catch (e) { /* the panel simply does not change */ }
+  };
+
+  removeRule = (rule) => async () => {
+    const q = new URLSearchParams();
+    if (rule.tax_id) q.set('tax_id', rule.tax_id);
+    if (rule.name_key) q.set('name_key', rule.name_key);
+    try {
+      await fetch('/api/vendor-rules?' + q.toString(), { method: 'DELETE' });
+      await Promise.all([this.loadPlan(), this.loadClientData()]);
+    } catch (e) { /* ignore */ }
+  };
   openFolder = (folder) => () => this.setState({ folder, fileStatus: '' });
   backToFolders = () => this.setState({ folder: null, fileStatus: '' });
 
@@ -1088,6 +1166,34 @@ class Component extends DCLogic {
       fileListNote = `${fileRows.length} belge`;
     }
 
+    // ---- hesap planı --------------------------------------------------------------
+    const plan = st.plan || { accounts: {}, expense_choices: [], overrides: {},
+                              rules: [], suggestions: [], capitalisation_limit: 0 };
+    const accountName = (code) => plan.accounts[code] || code;
+
+    const suggestionRows = (plan.suggestions || []).map(s => ({
+      label: s.label,
+      meta: `${s.invoices}× · ${this.fmt(s.total).replace(' TL', '')}`,
+      choices: (plan.expense_choices || []).map(code => ({
+        code,
+        title: accountName(code),
+        // The account it already posts to is marked, so picking it is a confirmation
+        // rather than a change -- and the operator can see what they are changing from.
+        color: code === s.current_account ? acc : 'inherit',
+        shadow: code === s.current_account ? 'inset 0 0 0 1px ' + acc : 'none',
+        pick: this.setRule(s, code)
+      }))
+    }));
+
+    const ruleRows = (plan.rules || []).map(r => ({
+      label: r.label || r.tax_id || r.name_key,
+      key: r.tax_id ? `VKN ${r.tax_id}` : 'ada göre',
+      account: r.account, accountName: r.account_name,
+      remove: this.removeRule(r)
+    }));
+
+    const overrideCount = Object.keys(plan.overrides || {}).length;
+    const isHesap = st.tab === 'hesap';
     const isDosyalar = st.tab === 'dosyalar';
     let filesBreadcrumb = (st.client && st.client.label) || '';
     if (st.year) {
@@ -1201,12 +1307,27 @@ class Component extends DCLogic {
         return `${j.entry_count} fiş · ${j.line_count} satır`;
       })(),
 
-      isGenel: !isDosyalar, isDosyalar,
+      isGenel: !isDosyalar && !isHesap, isDosyalar, isHesap,
       setTabGenel: this.setTabGenel, setTabDosyalar: this.setTabDosyalar,
-      genelColor: isDosyalar ? 'inherit' : acc,
-      genelShadow: isDosyalar ? 'none' : 'inset 0 0 0 1px ' + acc,
+      setTabHesap: this.setTabHesap,
+      genelColor: (isDosyalar || isHesap) ? 'inherit' : acc,
+      genelShadow: (isDosyalar || isHesap) ? 'none' : 'inset 0 0 0 1px ' + acc,
       dosyalarColor: isDosyalar ? acc : 'inherit',
       dosyalarShadow: isDosyalar ? 'inset 0 0 0 1px ' + acc : 'none',
+      hesapColor: isHesap ? acc : 'inherit',
+      hesapShadow: isHesap ? 'inset 0 0 0 1px ' + acc : 'none',
+
+      suggestionRows, hasSuggestions: suggestionRows.length > 0,
+      ruleRows, hasRules: ruleRows.length > 0,
+      hesapNote: suggestionRows.length
+        ? `${suggestionRows.length} satıcı karar bekliyor`
+        : (ruleRows.length ? `${ruleRows.length} kural tanımlı`
+                           : 'tekrar eden satıcı yok'),
+      defaultsNote: 'Kural tanımlanmamış her gider 770 Genel Yönetim Giderleri\'ne '
+        + `gider yazılır. ${this.fmt(plan.capitalisation_limit).replace(' TL', '')} TL `
+        + '(KDV hariç) üzerindeki demirbaş alımları 255 Demirbaşlar\'a alınır — '
+        + 'VUK md. 313 gereği tek yılda gider yazılamaz.'
+        + (overrideCount ? ` ${overrideCount} kategori için özel hesap tanımlı.` : ''),
       filesBreadcrumb,
       needsYearForFiles: isDosyalar && !st.year,
       showFolderGrid: isDosyalar && !!st.year && !st.folder,

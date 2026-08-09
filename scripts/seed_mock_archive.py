@@ -150,7 +150,7 @@ MOCK_DATA = {
                                 "invoice_number": "GIB2026000001355",
                                 "issue_date": "2026-02-05T09:10:00Z",
                                 "direction": "ALIŞ",
-                                "counterparty": {"title": "Demir Çelik İnşaat Malzemeleri", "vkn_tckn": "4443332221"},
+                                "counterparty": {"title": "Çelik Hazır Beton A.Ş.", "vkn_tckn": "3332221110"},
                                 "subtotal": 65000.00, "kdv_total": 13000.00, "grand_total": 78000.00,
                                 "kdv_rate": 20,
                             }
@@ -162,7 +162,7 @@ MOCK_DATA = {
                                 "invoice_number": "GIB2026000002980",
                                 "issue_date": "2026-04-18T11:00:00Z",
                                 "direction": "ALIŞ",
-                                "counterparty": {"title": "Vinç ve İş Makinaları Kiralama", "vkn_tckn": "5554443332"},
+                                "counterparty": {"title": "Çelik Hazır Beton A.Ş.", "vkn_tckn": "3332221110"},
                                 "subtotal": 30000.00, "kdv_total": 6000.00, "grand_total": 36000.00,
                                 "kdv_rate": 20,
                             }

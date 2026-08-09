@@ -235,3 +235,134 @@ def test_csv_strips_semicolons_out_of_a_vendor_name(conn):
     conn.commit()
     for row in hesap.to_csv(hesap.journal(conn)).splitlines()[1:]:
         assert len(row.split(";")) == len(hesap.CSV_COLUMNS)
+
+
+# --- supplier rules: the precise half of account assignment ----------------------------
+
+
+def add_rule(conn, account, *, tax_id=None, name_key=None, label="X"):
+    conn.execute(
+        "INSERT INTO vendor_rules (tax_id, name_key, account, label, created_at) "
+        "VALUES (?, ?, ?, ?, '2026-01-01T00:00:00')",
+        (tax_id, name_key, account, label))
+    conn.commit()
+
+
+def test_a_supplier_rule_beats_the_category_default(conn):
+    """A category is a guess about a kind of spend; a supplier is a fact about a
+    counterparty."""
+    add(conn, "V1", direction="alis", net=100.0, tax=20.0, category="hizmet")
+    add_rule(conn, "153", tax_id="1234567890")
+
+    accounts = [l.account for l in hesap.journal(conn).entries[0].lines]
+    assert "153" in accounts and "770" not in accounts
+
+
+def test_a_rule_keyed_on_the_tax_id_survives_a_renamed_seller(conn):
+    """The same issuer arrives as "TURKCELL ILETISIM HIZMETLERI A.S." on one invoice
+    and "Turkcell" on the next; the VKN does not move."""
+    add(conn, "V1", direction="alis", net=100.0, tax=20.0)
+    conn.execute("UPDATE invoices SET vendor = 'BAMBASKA YAZILMIS AD' WHERE invoice_no='V1'")
+    conn.commit()
+    add_rule(conn, "760", tax_id="1234567890")
+
+    assert "760" in [l.account for l in hesap.journal(conn).entries[0].lines]
+
+
+def test_a_name_rule_covers_a_seller_whose_tax_id_did_not_extract(conn):
+    add(conn, "V1", direction="alis", net=100.0, tax=20.0)
+    conn.execute("UPDATE invoices SET vendor_tax_id = NULL WHERE invoice_no = 'V1'")
+    conn.commit()
+    add_rule(conn, "740", name_key=hesap.fold_tr("Örnek Tedarik Ltd."))
+
+    assert "740" in [l.account for l in hesap.journal(conn).entries[0].lines]
+
+
+def test_name_matching_ignores_case_and_turkish_accents(conn):
+    """Otherwise one supplier forks into several rules that each half-work."""
+    rules = [{"tax_id": None, "name_key": hesap.fold_tr("Örnek Tedarik Ltd."),
+              "account": "760", "label": "x"}]
+    assert hesap.match_rule(rules, None, "ÖRNEK TEDARİK LTD.") == "760"
+    assert hesap.match_rule(rules, None, "örnek tedarik ltd.") == "760"
+
+
+def test_the_tax_id_rule_wins_over_a_name_rule(conn):
+    rules = [
+        {"tax_id": None, "name_key": "ornek tedarik ltd.", "account": "760", "label": "x"},
+        {"tax_id": "1234567890", "name_key": None, "account": "153", "label": "y"},
+    ]
+    assert hesap.match_rule(rules, "1234567890", "Örnek Tedarik Ltd.") == "153"
+
+
+def test_a_rule_does_not_silently_expense_a_fixed_asset(conn):
+    """The operator's instruction stands -- they are the professional -- but a stale
+    rule quietly writing off a 40.000 TL machine is exactly what an inspection finds,
+    so it is flagged rather than overridden."""
+    add(conn, "V1", direction="alis", net=40000.0, tax=8000.0, category="elektronik")
+    add_rule(conn, "770", tax_id="1234567890")
+
+    report = hesap.journal(conn)
+    entry = report.entries[0]
+    assert "770" in [l.account for l in entry.lines]      # instruction respected
+    assert "255" in entry.note                             # and questioned
+    assert report.noted
+
+
+def test_a_rule_pointing_at_255_raises_no_question(conn):
+    add(conn, "V1", direction="alis", net=40000.0, tax=8000.0, category="elektronik")
+    add_rule(conn, "255", tax_id="1234567890")
+    assert hesap.journal(conn).entries[0].note is None
+
+
+def test_an_unknown_account_in_a_rule_is_ignored(conn):
+    add(conn, "V1", direction="alis", net=100.0, tax=20.0)
+    add_rule(conn, "999", tax_id="1234567890")
+    assert "770" in [l.account for l in hesap.journal(conn).entries[0].lines]
+
+
+def test_rules_never_touch_sales(conn):
+    """A sale posts to 600 whoever the customer is."""
+    add(conn, "S1", direction="satis", net=100.0, tax=20.0)
+    add_rule(conn, "153", tax_id="1234567890")
+    assert "600" in [l.account for l in hesap.journal(conn).entries[0].lines]
+
+
+# --- suggestions ---------------------------------------------------------------------
+
+
+def test_a_recurring_supplier_is_suggested(conn):
+    for no in ("R1", "R2", "R3"):
+        add(conn, no, direction="alis", net=100.0, tax=20.0)
+    found = hesap.suggest_rules(conn)
+    assert len(found) == 1
+    assert found[0].invoices == 3
+    assert found[0].tax_id == "1234567890"
+    assert found[0].current_account == "770"
+
+
+def test_a_one_off_supplier_is_not_suggested(conn):
+    """Below the threshold the rule costs more attention than it saves."""
+    add(conn, "O1", direction="alis", net=100.0, tax=20.0)
+    assert hesap.suggest_rules(conn) == []
+
+
+def test_a_supplier_already_decided_is_not_suggested_again(conn):
+    for no in ("R1", "R2"):
+        add(conn, no, direction="alis", net=100.0, tax=20.0)
+    add_rule(conn, "153", tax_id="1234567890")
+    assert hesap.suggest_rules(conn) == []
+
+
+def test_customers_are_not_suggested(conn):
+    for no in ("S1", "S2", "S3"):
+        add(conn, no, direction="satis", net=100.0, tax=20.0)
+    assert hesap.suggest_rules(conn) == []
+
+
+def test_suggestions_scope_to_a_client(conn):
+    first = clients.resolve(conn, "111 - Bir").id
+    second = clients.resolve(conn, "222 - Iki").id
+    for no in ("A1", "A2"):
+        add(conn, no, direction="alis", net=100.0, tax=20.0, client_id=first)
+    assert len(hesap.suggest_rules(conn, client_id=first)) == 1
+    assert hesap.suggest_rules(conn, client_id=second) == []
