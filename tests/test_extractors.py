@@ -95,3 +95,31 @@ def test_missing_required_fields_are_flagged():
     assert inv.needs_review
     assert "missing:invoice_no" in inv.review_reasons
     assert "missing:total_amount" in inv.review_reasons
+
+
+def test_sole_trader_vendor_is_read_from_the_header():
+    """A şahıs şirketi bills under a person's name, with no "Ltd. Şti."/"A.Ş." token for
+    the profile to anchor on. It used to come back None and print as "(satıcı adı
+    okunamadı)" -- a common case for a Turkish practice, not an edge one."""
+    text = "\n".join([
+        "CANAN AYDIN E-TICARET VE DANISMANLIK",
+        "e-ARSIV FATURA",
+        "",
+        "FATURA NO: EAR2026000145892",
+        "FATURA TARIHI: 15.01.2026",
+        "VERGI KIMLIK NO: 45678912345",
+        "SAYIN: Bireysel Musteri",
+        "ODENECEK TUTAR: 3.000,00 TL",
+    ])
+    assert extract_invoice(text).vendor == "CANAN AYDIN E-TICARET VE DANISMANLIK"
+
+
+def test_the_sole_trader_fallback_never_names_the_buyer():
+    """Returning None is better than naming the wrong party as the seller."""
+    text = "\n".join([
+        "SAYIN: Kaya Yapi Ltd. Sti.",
+        "e-ARSIV FATURA",
+        "FATURA NO: X1",
+        "ODENECEK TUTAR: 100,00 TL",
+    ])
+    assert extract_invoice(text).vendor is None

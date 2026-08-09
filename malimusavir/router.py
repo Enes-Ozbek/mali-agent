@@ -45,6 +45,15 @@ class Intent(str, Enum):
     BY_MONTH = "by_month"
     RECURRING = "recurring"
     TAX = "tax"
+    #: The KDV *position* -- hesaplanan minus indirilecek. Distinct from TAX, which is
+    #: just the sum of tax_amount. Conflating them is dangerous: for a client in a
+    #: refund position TAX reports a large figure that reads as money owed when the
+    #: real answer is "nothing owed, X carried forward".
+    VAT_POSITION = "vat_position"
+    INCOME = "income"          #: toplam gelir -- sales only
+    EXPENSE = "expense"        #: toplam gider -- purchases only
+    DECLARATION = "declaration"  #: tahakkuk fişi / beyanname
+    DOCUMENT = "document"      #: vergi levhası, banka ekstresi, sözleşme
     LIST = "list"
     SEMANTIC = "semantic"      #: not an aggregate -- hand to RAG
 
@@ -52,6 +61,20 @@ class Intent(str, Enum):
 #: Checked in order; the first match wins, so specific phrases precede general ones.
 #: "en son ne zaman" must beat "ne kadar", and "en cok hangi kategori" must beat "en cok".
 INTENT_PATTERNS: tuple[tuple[Intent, tuple[str, ...]], ...] = (
+    # Documents first: "vergi levhası nerede" contains "vergi", and TAX would otherwise
+    # answer a "where is this document" question with a KDV figure.
+    (Intent.DOCUMENT, ("vergi levhasi", "banka ekstre", "ekstre", "sozlesme", "ruhsat",
+                       "imza sirkuleri", "hangi belgeler", "belgeler neler",
+                       "belge var mi")),
+    (Intent.DECLARATION, ("tahakkuk", "beyanname", "beyan ")),
+    # Before TAX, which matches a bare "kdv" and would otherwise swallow all of these.
+    (Intent.VAT_POSITION, ("odenecek kdv", "devreden kdv", "kdv durumu", "kdv pozisyon",
+                           "hesaplanan kdv", "indirilecek kdv", "kdv ozeti",
+                           "kdv farki", "ne kadar kdv odeyecek")),
+    (Intent.INCOME, ("toplam gelir", "gelir ne kadar", "gelir toplam", "hasilat",
+                     "ne kadar kazan", "satis toplam", "toplam satis")),
+    (Intent.EXPENSE, ("toplam gider", "gider ne kadar", "gider toplam", "toplam masraf",
+                      "alis toplam", "toplam alis")),
     (Intent.RECURRING, ("duzenli", "abonelik", "her ay odedi", "surekli odedi")),
     (Intent.BY_MONTH, ("aylik", "aya gore", "aylara gore", "ay bazinda", "her ay ne kadar",
                        "hangi ay")),
@@ -68,9 +91,12 @@ INTENT_PATTERNS: tuple[tuple[Intent, tuple[str, ...]], ...] = (
     # "toplami ne kadar" needs its own entry: the possessive suffix means "toplam ne
     # kadar" is not a substring of it, so "Kaya Yapı'nın toplamı ne kadar" fell through
     # to semantic search and came back with nothing.
+    # "toplam gider" used to live here and answered with the grand total, sales
+    # included -- for a client whose invoices are all sales that is a completely
+    # invented expense figure. It belongs to EXPENSE above.
     (Intent.TOTAL, ("toplam ne kadar", "toplami ne kadar", "toplami nedir",
                     "ne kadar harca", "ne kadar ode", "toplam harca",
-                    "toplam tutar", "ne kadar para", "toplam gider", "ne kadar tuttu")),
+                    "toplam tutar", "ne kadar para", "ne kadar tuttu")),
 )
 
 #: Phrases that ask for a listing rather than a figure.
@@ -325,6 +351,19 @@ def _month_window(year: int, month: int) -> tuple[str, str]:
     return start.isoformat(), end.date().isoformat() if hasattr(end, "date") else end.isoformat()
 
 
+def wants_listing(question: str) -> bool:
+    """Whether the question is a bare "list them" command.
+
+    Used for follow-ups: "listele onları" names no vendor, category or client of its
+    own, so classify() cannot tell it is about invoices at all and drops it into
+    semantic search. Paired with the previous turn's subject it is unambiguous.
+    """
+    folded = fold_tr(question)
+    if any(marker in folded for marker in _CONTENT_MARKERS):
+        return False
+    return any(marker in folded for marker in _LIST_MARKERS)
+
+
 def classify(question: str, *, vendors: list[str] | None = None,
              categories: list[str] | None = None, clients: list[ClientRef] | None = None,
              today: date | None = None) -> Question:
@@ -442,6 +481,91 @@ def resolve_client_scope(
     return None, (f"tüm müşteriler, {total} müşteri" if total > 1 else None), None
 
 
+def _client_filter(client_id: int | str | None) -> tuple[str, list]:
+    """A WHERE fragment scoping a query to one client."""
+    if client_id == stats.UNASSIGNED:
+        return "client_id IS NULL", []
+    if client_id is None:
+        return "1=1", []
+    return "client_id = ?", [int(client_id)]
+
+
+def _assessed_vat(conn: sqlite3.Connection, parsed: Question,
+                  client_id: int | str | None) -> float | None:
+    """What the tax office assessed for KDV, from clean tahakkuk fişi.
+
+    Only receipts that parsed cleanly count. A flagged one might hold any figure, and
+    quoting it beside a computed number would give a mismatch no one could act on.
+    """
+    where, params = _client_filter(client_id)
+    row = conn.execute(
+        f"SELECT COUNT(*) n, COALESCE(SUM(payable), 0) total FROM declarations "
+        f"WHERE {where} AND kind = 'kdv' AND needs_review = 0", params).fetchone()
+    return float(row["total"]) if row["n"] else None
+
+
+def _declarations_answer(conn: sqlite3.Connection, parsed: Question,
+                         client_id: int | str | None,
+                         client_label: str | None) -> Answer:
+    """Tahakkuk fişi and beyanname, which live outside the invoice frame."""
+    where, params = _client_filter(client_id)
+    rows = conn.execute(
+        f"SELECT kind, period, payable, due_date, receipt_no, needs_review "
+        f"FROM declarations WHERE {where} ORDER BY period DESC, id", params).fetchall()
+
+    scope = _scope(parsed, client_label)
+    if not rows:
+        return Answer(f"Kayıtlı tahakkuk fişi veya beyanname yok{scope}.",
+                      [], parsed.intent)
+
+    clean = [r for r in rows if not r["needs_review"] and r["payable"] is not None]
+    total = round(sum(r["payable"] for r in clean), 2)
+    lines = [f"{len(rows)} tahakkuk/beyanname kaydı{scope}, "
+             f"okunabilen {len(clean)} fişin toplamı {format_tr_amount(total)} TL:"]
+    for row in rows[:12]:
+        amount = ("okunamadı" if row["needs_review"] or row["payable"] is None
+                  else f"{format_tr_amount(row['payable'])} TL")
+        lines.append(f"  {row['period'] or '-'}  {(row['kind'] or '-').upper():<8} "
+                     f"{amount:>14}  vade {row['due_date'] or '-'}")
+    if len(rows) > 12:
+        lines.append(f"  ... ve {len(rows) - 12} kayıt daha")
+    return Answer("\n".join(lines), [dict(r) for r in rows], parsed.intent)
+
+
+def _documents_answer(conn: sqlite3.Connection, parsed: Question,
+                      client_id: int | str | None,
+                      client_label: str | None) -> Answer:
+    """Bank statements, licences, contracts -- stored and locatable, never parsed.
+
+    Answers "where is it", not "what is in it": these files have no extractor, so the
+    only honest thing to give is the folder they sit in.
+    """
+    where, params = _client_filter(client_id)
+    rows = conn.execute(
+        f"SELECT doc_type, doc_year, doc_month, filename, source_path FROM documents "
+        f"WHERE {where} ORDER BY doc_year DESC, doc_month, doc_type, filename",
+        params).fetchall()
+
+    scope = _scope(parsed, client_label)
+    if not rows:
+        return Answer(f"Kayıtlı belge yok{scope}.", [], parsed.intent)
+
+    # Narrow to what was asked about when the question names a document type.
+    folded = fold_tr(parsed.raw)
+    matched = [r for r in rows
+               if any(word in fold_tr(f"{r['doc_type']} {r['filename']}")
+                      for word in folded.split() if len(word) > 4)]
+    shown = matched or rows
+
+    lines = [f"{len(shown)} belge{scope}:"]
+    for row in shown[:12]:
+        period = f"{row['doc_year']}" + (f"/{row['doc_month']:02d}" if row["doc_month"] else "")
+        lines.append(f"  {period}  {row['filename']}  ({row['doc_type']})")
+    if len(shown) > 12:
+        lines.append(f"  ... ve {len(shown) - 12} belge daha")
+    return Answer("\n".join(lines), [dict(r) for r in shown], parsed.intent)
+
+
 def _vendor_name(value) -> str:
     """A seller name fit to show.
 
@@ -480,6 +604,14 @@ def answer(conn: sqlite3.Connection, parsed: Question,
     if refusal is not None:
         return Answer(refusal, [], parsed.intent)
 
+    # These read tables the invoice frame does not cover, and must answer even when the
+    # client has no invoices at all -- "tahakkuk fişi ne kadar" is a fair question for a
+    # client whose only documents are receipts.
+    if parsed.intent is Intent.DECLARATION:
+        return _declarations_answer(conn, parsed, client_id, client_label)
+    if parsed.intent is Intent.DOCUMENT:
+        return _documents_answer(conn, parsed, client_id, client_label)
+
     frame = _filtered(conn, parsed, client_id)
     scope = _scope(parsed, client_label)
     if frame.empty:
@@ -499,9 +631,40 @@ def answer(conn: sqlite3.Connection, parsed: Question,
     if intent is Intent.TAX:
         return Answer(
             f"Toplam KDV/vergi{scope}: {money(summary.tax)} TL "
-            f"(matrah {money(summary.net)} TL, genel toplam {money(summary.total)} TL).",
+            f"(matrah {money(summary.net)} TL, genel toplam {money(summary.total)} TL). "
+            "Bu, faturalardaki KDV toplamıdır; ödenecek KDV için "
+            "\"ödenecek KDV ne kadar\" diye sorun.",
             [], intent,
         )
+
+    if intent in (Intent.VAT_POSITION, Intent.INCOME, Intent.EXPENSE):
+        vat = stats.vat_summary(frame)
+
+        if intent is Intent.INCOME:
+            return Answer(
+                f"Toplam gelir{scope}: {money(vat.income)} TL "
+                f"({vat.sales_count} satış faturası, KDV hariç).", [], intent)
+
+        if intent is Intent.EXPENSE:
+            return Answer(
+                f"Toplam gider{scope}: {money(vat.expense)} TL "
+                f"({vat.purchase_count} alış faturası, KDV hariç).", [], intent)
+
+        # The figure people mean by "KDV" in conversation is the position, not the sum
+        # of tax_amount. Both directions are stated explicitly, because "0,00 ödenecek"
+        # on its own looks like missing data rather than a refund position.
+        owed = (f"Ödenecek KDV: {money(vat.payable)} TL"
+                if vat.vat_balance >= 0
+                else f"Ödenecek KDV yok; {money(vat.carried_forward)} TL devreden KDV")
+        text = (f"KDV durumu{scope}: hesaplanan {money(vat.output_vat)} TL, "
+                f"indirilecek {money(vat.input_vat)} TL. {owed}.")
+
+        assessed = _assessed_vat(conn, parsed, client_id)
+        if assessed is not None:
+            text += f" Tahakkuk fişlerine göre: {money(assessed)} TL."
+            if abs(assessed - vat.payable) > 0.02:
+                text += " İki rakam uyuşmuyor, fişleri kontrol edin."
+        return Answer(text, [], intent)
 
     if intent is Intent.COUNT:
         return Answer(f"{summary.invoices} fatura{scope} kayıtlı "

@@ -57,6 +57,11 @@ RELEVANCE_SPREAD_MIN = 0.04
 CAPABILITY_LABELS: dict[router.Intent, str] = {
     router.Intent.TOTAL: "Toplam ne kadar harcadım?",
     router.Intent.TAX: "Ne kadar KDV ödedim?",
+    router.Intent.VAT_POSITION: "Ödenecek KDV ne kadar?",
+    router.Intent.INCOME: "Toplam gelir ne kadar?",
+    router.Intent.EXPENSE: "Toplam gider ne kadar?",
+    router.Intent.DECLARATION: "Tahakkuk fişleri ne durumda?",
+    router.Intent.DOCUMENT: "Vergi levhası hangi klasörde?",
     router.Intent.COUNT: "Kaç faturam var?",
     router.Intent.LAST: "En son ne zaman alışveriş yaptım?",
     router.Intent.FIRST: "İlk faturam ne zaman?",
@@ -211,9 +216,24 @@ def _route_in_context(conn: sqlite3.Connection, question: str, previous: str | N
     parsed = router.classify(question, vendors=vendors, categories=categories,
                              clients=clients)
 
-    if previous and parsed.is_aggregate:
+    prior = None
+    if previous:
         prior = router.classify(previous, vendors=vendors, categories=categories,
                                 clients=clients)
+
+    # "Canan Aydın'ın kaç faturası var" -> "listele onları". The follow-up names nothing,
+    # so classify() cannot see it is about invoices and drops it into semantic search,
+    # where retrieval scores it off-topic and the model answers with conversational
+    # filler. Promoted here instead, because the previous turn supplies the subject the
+    # question is missing. Only for a bare list command: a question asking what is
+    # *inside* the invoices still belongs to line-item search.
+    if (prior is not None and not parsed.is_aggregate
+            and router.wants_listing(parsed.raw)
+            and (prior.clients or prior.vendors or prior.category)):
+        parsed.intent = router.Intent.LIST
+        parsed.matched = "liste"
+
+    if previous and parsed.is_aggregate:
         if not parsed.vendors and prior.vendors:
             parsed.vendors = prior.vendors
         if not parsed.category and prior.category:

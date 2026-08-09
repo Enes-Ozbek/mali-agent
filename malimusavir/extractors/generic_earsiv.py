@@ -262,4 +262,32 @@ class GenericEArsivProfile(InvoiceProfile):
             candidate = clean_ws(" ".join(p for p in parts if p))
             if candidate and 5 < len(candidate) < 160:
                 return candidate
+
+        return self._sole_trader_name(lines)
+
+    def _sole_trader_name(self, lines: list[str]) -> str | None:
+        """The header line of a şahıs şirketi invoice, which has no legal-form token.
+
+        A sole trader bills under a person's name -- "CANAN AYDIN E-TICARET" -- so the
+        loop above finds nothing and the vendor came back None, printing as "(satıcı
+        adı okunamadı)" in the ledger and in the assistant's answers. Many clients of a
+        Turkish practice are şahıs, so this is a common case, not an edge one.
+
+        Deliberately narrow: only the first few lines, only above the "e-Arşiv Fatura"
+        heading that every one of these documents carries, and nothing that looks like a
+        label or a value. Outside that shape it still returns None rather than guessing
+        -- naming the wrong party as the seller would be worse than naming none.
+        """
+        for index, line in enumerate(lines[:6]):
+            if "fatura" not in fold_tr(line):
+                continue
+            for previous in reversed(lines[:index]):
+                candidate = clean_ws(previous)
+                if not candidate or not _is_name_continuation(previous):
+                    continue
+                if _is_third_party_context(previous):
+                    break
+                if 5 < len(candidate) < 160:
+                    return candidate
+            break
         return None
