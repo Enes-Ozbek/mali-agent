@@ -367,12 +367,10 @@ class Component extends DCLogic {
     tree: [], openYears: [], openMonths: [], docType: null,
     preview: null,
     tab: 'genel', folder: null, fileStatus: '',
-    // Hızlı by default. Measured on this machine: the router answers in under a
-    // second and scored 23/23 on scripts/eval_agent.py; routing the same answers
-    // through qwen3-4b takes 36-66s and only rewords a sentence that was already
-    // correct Turkish. An accountant asking "ödenecek KDV ne kadar" wants the figure,
-    // not a paragraph a minute later. AI stays one click away for conversational use.
-    draft: '', asking: false, hover: null, useLlm: false,
+    // AI by default: the model writes the answers. The numbers still come from SQL and
+    // are shown underneath every reply, so a mangled phrasing is always checkable
+    // against what was actually computed.
+    draft: '', asking: false, hover: null, useLlm: true,
     chat: []
   };
 
@@ -1023,9 +1021,8 @@ class Component extends DCLogic {
       fastColor: st.useLlm ? 'inherit' : acc,
       fastShadow: st.useLlm ? 'none' : 'inset 0 0 0 1px ' + acc,
       modeNote: st.useLlm
-        ? 'Sayılar veritabanından hesaplanır, yanıtı model yazar (~40-60 sn).'
-        : 'Doğrudan veritabanı yanıtı — anında ve aynı rakamlar. Model yalnızca '
-          + 'cümleyi yeniden yazar; sohbet için AI moduna geçin.'
+        ? 'Sayılar veritabanından hesaplanır, yanıtı model yazar (~30-60 sn).'
+        : 'Doğrudan veritabanı yanıtı — anında, model kullanılmaz.'
     };
   }
 }

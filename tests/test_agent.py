@@ -238,3 +238,40 @@ def test_described_capabilities_are_actually_routable(conn):
             continue
         parsed = router.classify(label, vendors=vendors, categories=categories)
         assert parsed.intent is intent, f"{label!r} routed to {parsed.intent}, not {intent}"
+
+
+# --- the panel renders plain text, so markdown has to come off ------------------------
+
+
+def test_plain_text_strips_markdown_the_model_emits_anyway():
+    """Told twice not to, qwen3-4b still returns bold headings; the panel shows the
+    asterisks literally. Asking is worth it, depending on it is not."""
+    raw = "**Ödenecek KDV:** 19.000,00 TL\n### Detay\n* satır bir\n---\n"
+    cleaned = agent.plain_text(raw)
+    assert "*" not in cleaned
+    assert "#" not in cleaned
+    assert "Ödenecek KDV: 19.000,00 TL" in cleaned
+    assert "- satır bir" in cleaned
+
+
+def test_plain_text_drops_the_echoed_prompt_header():
+    """The model copies the "HESAPLANAN VERİ" label -- scaffolding meant for it, not
+    for the user -- into its answer, wrapped in bold."""
+    raw = "**HESAPLANAN VERİ (veritabanından)**\nToplam: 9.000,00 TL"
+    cleaned = agent.plain_text(raw)
+    assert "HESAPLANAN" not in cleaned
+    assert "Toplam: 9.000,00 TL" in cleaned
+
+
+def test_plain_text_never_touches_the_figures():
+    """Presentation only. A cleaner that could alter a number would be worse than the
+    markdown it removes."""
+    raw = "**1.234,56 TL** ve *9.744,74 TL* ile 39.000,00 TL"
+    cleaned = agent.plain_text(raw)
+    for amount in ("1.234,56", "9.744,74", "39.000,00"):
+        assert amount in cleaned
+
+
+def test_plain_text_leaves_ordinary_prose_alone():
+    text = "Canan Aydın'ın 3 faturası vardır, toplam 9.000,00 TL."
+    assert agent.plain_text(text) == text

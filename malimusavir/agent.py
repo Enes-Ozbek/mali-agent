@@ -21,6 +21,7 @@ still go to rag.py, where retrieval grounds the model in real invoice summaries.
 from __future__ import annotations
 
 import datetime
+import re
 import sqlite3
 from dataclasses import dataclass, field
 
@@ -85,7 +86,10 @@ Kurallar:
   Bu sayıları aynen kullan; asla değiştirme, yuvarlama veya kendi hesabını yapma.
 - Sana verilmeyen bir sayıyı asla uydurma. Veri yoksa "bu bilgi faturalarda yok" de.
 - Kısa ve net konuş. Türkçe yanıt ver. Para birimini "1.234,56 TL" biçiminde yaz.
-- Madde işareti kullanma, düz cümle kur. Markdown başlık kullanma.
+- DÜZ METİN yaz. Markdown kullanma: yıldız (*), kalın yazı, başlık (#) YASAK.
+  Arayüz markdown'ı işlemez; yazdığın yıldızlar kullanıcıya aynen görünür.
+- Sana verilen "HESAPLANAN VERİ" gibi başlıkları yanıtında tekrarlama; bunlar
+  senin için, kullanıcı için değil.
 - HESAPLANAN VERİ'deki parantez içi KAPSAMI aynen koru. Veri "tüm müşteriler"
   kapsamındaysa rakamı tek bir müşteriye ATFETME; "tüm müşteriler toplamında" de.
   Veri bir müşteri adı taşıyorsa yanıtta o adı kullan, başka bir ad uydurma.
@@ -100,6 +104,27 @@ Kullanıcının sorusu: {question}
 
 Yukarıdaki veriyi kullanarak soruyu doğal bir Türkçe cümleyle yanıtla."""
 
+#: Used when the computed answer is a table or has several clauses that each carry a
+#: figure. Measured against qwen3-4b: with the plain template above, the full monthly
+#: breakdown came back as "Aylık harcama, tüm müşterilerin aylık faturalarının
+#: toplamıdır" -- a definition of the term with no data in it -- and a KDV position
+#: came back with the payable figure but without the carried-forward one. Naming the
+#: completeness requirement, and forbidding the definition-instead-of-data failure by
+#: example, is what makes the model keep them.
+_GROUNDED_TABLE = """HESAPLANAN VERİ (veritabanından, doğrudur):
+{facts}
+
+Kullanıcının sorusu: {question}
+
+Bu veriyi Türkçe olarak aktar. Kurallar:
+- Verideki HER satırı ve HER rakamı yanıtına dahil et. Hiçbirini atlama, özetleme
+  veya "vb." deyip geçme.
+- Rakamları aynen kopyala; yeniden hesaplama, toplama veya yuvarlama yapma.
+- Terimin tanımını yazma. "Aylık harcama, faturaların toplamıdır" gibi bir açıklama
+  yanlış bir yanıttır — kullanıcı tanımı değil, yukarıdaki rakamları istiyor.
+- Kısa bir giriş cümlesi yaz, sonra her satırı "- " ile başlayan ayrı bir satıra koy.
+- DÜZ METİN: yıldız (*), kalın yazı veya başlık kullanma. Başlıkları tekrarlama."""
+
 _OFF_TOPIC = """Kullanıcının sorusu faturalarıyla ilgili değil: "{question}"
 
 Bunu sıradan bir sohbet gibi, kendi genel bilgine dayanarak kısa ve samimi şekilde
@@ -107,6 +132,42 @@ yanıtla. BUGÜNÜN TARİHİ satırındaki bilgiyi tarih/gün sorularında kulla
 Ama: gerçek zamanlı bilgin yok (hava durumu, güncel haberler, canlı veriler) —
 böyle bir şey sorulursa bunu dürüstçe söyle, uydurma. Kullanıcının faturaları
 hakkında hiçbir rakam veya bilgi verme; bu soru onlarla ilgili değil."""
+
+
+#: Markdown the model emits despite being told not to, and the prompt scaffolding it
+#: sometimes copies into its answer.
+_BOLD = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+_HEADING = re.compile(r"^\s{0,3}#{1,6}\s*", re.MULTILINE)
+_RULE = re.compile(r"^\s*[-*_]{3,}\s*$", re.MULTILINE)
+_STAR_BULLET = re.compile(r"^(\s*)\*\s+", re.MULTILINE)
+_SCAFFOLD = re.compile(
+    r"^\s*(HESAPLANAN VERİ|HESAPLANAN VERI)\b.*$", re.MULTILINE | re.IGNORECASE)
+_BLANK_RUN = re.compile(r"\n{3,}")
+
+
+def plain_text(text: str) -> str:
+    """Strip markdown and echoed prompt headers from a model reply.
+
+    The panel renders replies as plain text, so "**19.000,00 TL**" reaches the user
+    with the asterisks visible. qwen3-4b emits them anyway -- told twice, in the system
+    prompt and again in the task prompt, it still produced bold headings and copied the
+    "HESAPLANAN VERİ" label straight into its answer.
+
+    Formatting is worth asking for and not worth depending on, so it is also removed
+    here. Presentation only: this touches markers, never digits, so a figure cannot be
+    changed by it.
+    """
+    if not text:
+        return text
+    # Markers come off before the scaffold check: the header arrives as
+    # "**HESAPLANAN VERİ**", which does not start with the word itself.
+    cleaned = _BOLD.sub(r"\1", text)
+    cleaned = _HEADING.sub("", cleaned)
+    cleaned = _SCAFFOLD.sub("", cleaned)
+    cleaned = _RULE.sub("", cleaned)
+    cleaned = _STAR_BULLET.sub(r"\1- ", cleaned)
+    cleaned = cleaned.replace("**", "")
+    return _BLANK_RUN.sub("\n\n", cleaned).strip()
 
 
 def _now_tr() -> str:
@@ -190,18 +251,9 @@ def capabilities(conn: sqlite3.Connection, client_id: int | str | None = None) -
     )
 
 
-#: Intents whose computed answer is a table or a statement where every clause carries
-#: information. The model is not asked to reword these.
-#:
-#: Measured with scripts/eval_agent.py against qwen3-4b. Given the full monthly
-#: breakdown it replied "Aylık harcama, tüm müşterilerin aylık faturalarının
-#: toplamıdır" -- a definition of the term with no data in it. Given "hesaplanan 0,00,
-#: indirilecek 39.000,00, ödenecek yok; 39.000,00 devreden" it replied "Ödenecek KDV
-#: yoktur", dropping the carried-forward figure, which is the part an accountant needs.
-#:
-#: Single-figure answers survive rewording intact and still go through the model, which
-#: is where its phrasing is worth the wait. A table cannot be improved by it, only
-#: shortened.
+#: Intents whose computed answer is a table rather than a single figure. Not a bypass:
+#: these still go through the model, but with an instruction that every row has to
+#: survive, because measurement showed it dropping them.
 TABULAR_INTENTS = frozenset({
     router.Intent.BY_CATEGORY, router.Intent.BY_VENDOR, router.Intent.BY_MONTH,
     router.Intent.RECURRING, router.Intent.LIST, router.Intent.DECLARATION,
@@ -316,23 +368,27 @@ def answer(
         # Measured: the model turned "this panel covers Zeynep, ask on Canan's page"
         # into "that information is not in the invoices", which is a different and
         # false claim. Returned unchanged, the same way capabilities() is.
-        if computed.verbatim or not use_llm or _is_tabular(computed):
+        if computed.verbatim or not use_llm:
             return AgentReply(computed.text, "router", computed.intent.value,
                               facts=computed.text)
+        template = _GROUNDED_TABLE if _is_tabular(computed) else _GROUNDED
         try:
             phrased = foundry.chat_turns(
                 turns + [{
                     "role": "user",
-                    "content": _GROUNDED.format(facts=computed.text, question=question),
+                    "content": template.format(facts=computed.text, question=question),
                 }],
                 system=_system_prompt(),
+                # A table needs room. The default cut multi-row answers short, which
+                # looked like the model omitting rows when it was simply stopped.
+                max_tokens=1200 if _is_tabular(computed) else 700,
             )
         except foundry.FoundryError:
             # The numbers are already correct without the model; degrade to them
             # rather than failing the request outright.
             return AgentReply(computed.text, "router", computed.intent.value,
                               facts=computed.text)
-        return AgentReply(phrased or computed.text, "router+llm",
+        return AgentReply(plain_text(phrased) or computed.text, "router+llm",
                           computed.intent.value, facts=computed.text)
 
     # Not an aggregate. Retrieval decides which of two very different things this is:
@@ -364,7 +420,8 @@ def answer(
             )
         except foundry.FoundryError:
             raise
-        return AgentReply(text or "Şu an yanıt veremiyorum.", "agent+llm", "off_topic")
+        return AgentReply(plain_text(text) or "Şu an yanıt veremiyorum.",
+                          "agent+llm", "off_topic")
 
     text, hits = rag.answer(conn, question, history=turns, system=_system_prompt(),
                             hits=hits, client_id=client_id)
@@ -375,7 +432,7 @@ def answer(
         }
         for h in hits
     ]
-    return AgentReply(text, "rag", "semantic", sources=sources)
+    return AgentReply(plain_text(text), "rag", "semantic", sources=sources)
 
 
 def converse(
