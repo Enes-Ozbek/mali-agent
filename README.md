@@ -1,12 +1,22 @@
 # Mali Müşavir
 
-Local Turkish e-Arşiv invoice assistant. Ingests invoice PDFs, extracts structured
-financial data, answers questions about them, and reports spend aggregates.
+A local document workspace for a Turkish accounting practice. It reads the archive you
+already keep on disk — client folders of e-Arşiv invoices, tahakkuk fişleri, beyannameler
+and bank statements — extracts what is in them, tells you what needs attention today, and
+hands your ledger software a yevmiye fişi.
 
-**Nothing leaves the machine.** All inference runs through [Foundry Local](https://learn.microsoft.com/azure/ai-foundry/foundry-local/);
-there are no network calls to any model provider.
+**Nothing leaves the machine.** All inference runs through
+[Foundry Local](https://learn.microsoft.com/azure/ai-foundry/foundry-local/); the web
+server and the model server both bind `127.0.0.1`. There are no calls to any model
+provider, and no telemetry.
 
-## Setup
+It is a companion to Luca/Zirve/Mikro, not a replacement. Those are where you post
+entries and file declarations. This is where you find the paperwork, see what is due, and
+produce the file you import into them.
+
+---
+
+## Quick start
 
 ```powershell
 python -m venv .venv
@@ -15,228 +25,257 @@ foundry model download qwen3-4b
 foundry model download qwen3-embedding-0.6b
 ```
 
-Verify the environment:
+Then either:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\check_env.py
+.\.venv\Scripts\python.exe main.py --serve          # http://127.0.0.1:8000
 ```
 
-## Usage
+or double-click **`Mali Musavir.cmd`**, which starts Foundry Local, starts the dashboard
+and opens the browser.
+
+To build a standalone `.exe` (no Python needed on the target machine):
 
 ```powershell
-.\.venv\Scripts\python.exe main.py --ingest "C:\path\to\faturalar"
-.\.venv\Scripts\python.exe main.py --stats
-.\.venv\Scripts\python.exe main.py --ask "en son ne zaman alışveriş yaptım"
-.\.venv\Scripts\python.exe main.py --review
+.\.venv\Scripts\pyinstaller.exe MaliMusavir.spec --noconfirm
 ```
 
-`--ask` handles both kinds of question. Ones that are really database queries are
-answered from SQL, instantly and exactly:
+This produces `dist\MaliMusavir\MaliMusavir.exe`. A folder build rather than one-file,
+because a single exe would unpack ~215 MB of pandas and scikit-learn on every launch. The
+database is written **beside the .exe**, not into PyInstaller's temp directory, so your
+data survives closing the program.
 
-| Question | Answered by |
-|---|---|
-| "toplam ne kadar harcadım" | SQL |
-| "Turkcell'e ne kadar ödedim" | SQL, scoped to that seller |
-| "en son ne zaman alışveriş yaptım" | SQL (`MAX(date)`) |
-| "2026 yılında ne kadar harcadım" | SQL, date-filtered |
-| "kategorilere göre harcamam" | SQL |
-| "düzenli ödemelerim neler" | SQL |
-| "vidalama seti hangi faturada" | semantic search |
+Verify the environment at any time with `scripts\check_env.py`.
 
-Useful flags: `--dry-run` (extract and print, write nothing), `--since` / `--until`
-(date-bounded stats), `--explain` (show how a question was classified), `--semantic`
-(bypass the router), `--llm-category` (see *Known limitations*), `--db PATH`.
+---
 
-Ingest is idempotent — re-running over the same folder is a no-op, so it is safe to
-point at a growing directory.
+## The archive
 
-## Web dashboard
+The folder layout *is* the data model. Client, year, month and document type all come
+from the path, so nothing has to be guessed from document contents:
+
+```
+C:\clients\
+  45678912345 - Canan Aydın E-Ticaret\      ← VKN/TCKN - Ünvan
+    2026\
+      01_Ocak\
+        1_Gelir_Faturalari\    *.pdf        → sales invoices
+        2_Gider_Faturalari\    *.pdf        → purchase invoices
+        3_Beyannameler\        *.pdf        → filed declarations
+        4_Tahakkuklar\         *.pdf        → accrual receipts
+        5_Banka_Ekstreleri\    *.csv/xlsx   → bank statements
+      belgeler\                *.pdf        → licences, contracts (no month)
+```
 
 ```powershell
-.\.venv\Scripts\python.exe main.py --serve
+.\.venv\Scripts\python.exe main.py --ingest-archive "C:\clients"
 ```
 
-Opens `http://127.0.0.1:8000` — three columns: recurring payments, category totals and
-PDF upload on the left; the monthly strip and full invoice ledger in the middle; the
-**AI assistant on the right**. One local process serves both the page and its JSON API
-(`malimusavir/api.py`) — same origin, no CORS, nothing leaves the machine. `--port`
-picks a different port; `--db` picks a different database file, same as every other
-command.
+Three things about this are deliberate:
 
-### How the assistant answers
+- **The client folder carries the tax number**, and ingest parses it. That is what makes
+  the sales/purchase split work without anyone typing a VKN into the UI — and it means
+  the tax id is the client's identity, so renaming a folder to correct an ünvan follows
+  the client instead of forking it into a second row.
+- **`1_Gelir` vs `2_Gider` states the invoice direction**, which beats comparing tax ids:
+  whoever filed the document knew which side of the ledger it belonged on.
+- **The month level is optional.** A document filed straight under the year keeps
+  `month = NULL` and shows as "Ay belirtilmemiş". It is never back-filled from the
+  document's own date — the field records where a file *sits*, so inventing it would hide
+  exactly the misfiling you want to catch.
+
+Ingest is idempotent, follows files that move between folders, and prunes rows whose file
+has left the archive (scoped to the root just walked, so `--client` cannot delete anyone
+else's data).
+
+---
+
+## What the dashboard does
+
+### Gündem — the landing page
+
+Opens on what needs attention, not on a client list:
+
+- **filing deadlines**, bucketed *gecikmiş / bu hafta / bu ay*
+- **periods with invoices but no tahakkuk**, past their filing date
+- **declarations held but unreadable**, and rows whose file has vanished from disk
+
+Clicking any row opens that client at that exact month.
+
+Two rules shape this, both about not overstating:
+
+**The receipt's own vade is authoritative.** GİB moves deadlines — May 2026's KDV and
+muhtasar were both pushed to 3 June — so a statutory calendar is only ever used to decide
+whether a *missing* declaration is late, and is labelled an expectation.
+
+**A passed due date is not an unpaid bill.** Nothing here records payment: a tahakkuk
+states what was assessed, not whether it was settled. So the wording is "vadesi geçti",
+the total is "tahakkuk eden", and the board says so in as many words.
+
+### The client workspace
+
+- **Arşiv tree** — Year → Month → Category, mirroring the folders. Selecting any node
+  narrows the summary, the tables and the export together.
+- **Mali Özet** — Toplam Gelir/Gider, Hesaplanan and İndirilecek KDV, and
+  Ödenecek-or-Devreden. Cross-checked against what the tahakkuk fişi actually assessed,
+  with the disagreement stated rather than reconciled away.
+- **Tahakkuklar** and the invoice ledger, each row with a file-present indicator and a
+  full-screen PDF preview (Esc or backdrop to close).
+- **Hesap Planı** — supplier rules and category defaults (below).
+- **Yevmiye indir** — the journal export, scoped to whatever the tree has selected.
+
+### Search
+
+In the header, always visible. Matches client name and VKN/TCKN; `/` focuses it, Esc
+clears. Typing from inside a client returns to the list, because looking for a client
+while in a different one is the normal case.
+
+---
+
+## The ledger bridge
+
+Invoices become the standard Tekdüzen double entry:
+
+```
+Satış (gelir faturası)             Alış (gider faturası)
+  120 Alıcılar          B tutar      770 Genel Yönetim Gid.  B matrah
+    600 Yurt İçi Satış  A matrah     191 İndirilecek KDV     B kdv
+    391 Hesaplanan KDV  A kdv          320 Satıcılar         A tutar
+```
+
+Exported as semicolon-separated CSV with Turkish amounts and a UTF-8 BOM, so Excel and
+the ledger importers read `İndirilecek KDV` instead of mangling it.
+
+**An entry that does not balance is never emitted.** A ledger import out by a kuruş posts
+cleanly, looks right, and surfaces weeks later as a trial balance that will not close.
+Anything that fails is listed by invoice number, and the workspace shows
+"N fatura aktarılamıyor" beside the download — so refusals are seen *before* the file is
+taken.
+
+### Where an expense posts
+
+Most specific first:
+
+1. **A supplier rule** — "this counterparty always posts here". Keyed on the seller's VKN
+   rather than their name, because the same issuer arrives as
+   `TURKCELL İLETİŞİM HİZMETLERİ A.Ş.` on one invoice and `Turkcell` on the next. The
+   Hesap Planı tab suggests suppliers seen twice or more with no rule yet.
+2. **A category override** — 153 vs 760 vs 740 depends on the business, not the invoice
+   text, so it is stated rather than inferred.
+3. **Capitalisation.** VUK md. 313: a fixed asset over **12.000 TL** (KDV hariç, 2026)
+   cannot be written off in one year — it goes to 255 Demirbaşlar. This one is a rule, not
+   a preference, so it applies automatically and says that it did.
+4. **Otherwise 770 Genel Yönetim Giderleri**, where the great majority of a small
+   taxpayer's costs belong.
+
+Where you have stated an account and the amount crosses the capitalisation limit anyway,
+your instruction stands and a note is raised instead. You are the professional — but a
+stale rule quietly expensing a 40.000 TL machine is what an inspection finds.
+
+---
+
+## The assistant
 
 `agent.py` splits the work so the model never touches arithmetic:
 
-1. `router.py` answers the question from SQL — exact, instant, already tested.
-2. Those computed facts are handed to the model as ground truth, and it is asked only
-   to phrase them in natural Turkish and carry the conversation.
+1. `router.py` answers from SQL — exact, instant, already tested.
+2. Those computed facts are handed to the model as ground truth, and it is asked only to
+   phrase them.
 
-**The model controls the wording; the database controls the numbers.** The computed
-line is shown beneath each answer, so you can always check the phrasing against what
-SQL actually returned. This split exists because it was measured: asked to answer
-"en son ne zaman alışveriş yaptım" from embeddings alone, `qwen3-4b` replied with a
-date that appears nowhere in the corpus.
-
-Follow-up questions inherit unstated filters. Ask "Superonline'a ne kadar ödedim" then
-"peki kaç fatura vardı", and the second answer stays scoped to Superonline — the bare
-router, being stateless, would have returned the global count. Anything a follow-up
-names explicitly wins over what it inherited.
-
-Questions about the assistant itself — "neler yapabilirsin", "merhaba", "yardım" — are
-detected by rule and answered directly from `agent.capabilities()`, which is generated
-from the router's own intent table plus a live summary of your data. No model call.
-
-That branch is deterministic on purpose, and the reason is worth recording. It was
-first built to let the model write the answer, and four attempts each failed
-differently: it invented a "1.234,56 TL" largest invoice that does not exist, echoed
-the prompt's own vocabulary back, and rendered the instructions as markdown headings —
-at ~80s each. "What can you do" has one fixed correct answer, so there is nothing for a
-model to add and a fabricated figure to lose. `test_agent.py` asserts every router
-intent appears in that list *and* that every example question it offers actually routes
-where it claims, so the help text cannot drift from what the tool really does.
-
-Two modes, toggled in the chat header:
+**The model controls the wording; the database controls the numbers.** The computed line
+is shown beneath every answer, so phrasing can always be checked against what SQL
+returned. The split exists because it was measured: asked to answer "en son ne zaman
+alışveriş yaptım" from embeddings alone, `qwen3-4b` replied with a date that appears
+nowhere in the corpus.
 
 | Mode | Behaviour | Speed |
 |---|---|---|
-| **AI** | SQL computes, model phrases, conversation carries | ~25–45s on CPU |
+| **AI** | SQL computes, model phrases, conversation carries | ~30–60s on CPU |
 | **Hızlı** | Raw computed answer, no model call | instant |
 
-If Foundry Local isn't running, AI mode degrades to the computed answer rather than
-failing — you lose the phrasing, not the number. Item lookups ("vidalama seti hangi
-faturada") genuinely need the model for retrieval, and those do surface an error.
+Things learned by measurement and encoded here:
 
-The page (`web/index.html`) is a static export from a Claude Design session, wired by
-hand to real data — the layout came from Claude Design, the data underneath it is 100%
-this project's existing `stats.py`/`router.py`/`rag.py`, unchanged. `web/support.js`
-and `web/_ds/` are its runtime and design tokens; treat them as generated assets, not
-something to hand-edit.
+- **Scope travels with every figure.** Asked "Canan Aydın'ın kaç faturası var" on the
+  practice-wide page, an earlier version computed the *global* count and the model
+  presented it as Canan's — a real number under the wrong name. Computed answers now
+  carry their subject, including "tüm müşteriler" when unscoped.
+- **Asking about another client from a client's page is refused**, not answered with the
+  page's client under the name you typed.
+- **Refusals are never reworded by the model.** Handed "this panel covers Zeynep, ask on
+  Canan's page", qwen3-4b returned "bu bilgi faturalarda yok" — a different and false
+  claim.
+- **Tables get a completeness instruction and a larger token budget.** Given the full
+  monthly breakdown, the model once replied with a *definition* of the term and no data.
+
+`scripts/eval_agent.py` asks 23 questions whose answers SQL already knows, checking
+route, facts and answer separately — so a routing bug is distinguishable from the model
+mangling a correct number. It currently passes 23/23 in both modes.
+
+---
 
 ## Architecture
 
 ```
-PDF ──► pdf_text.py ──► extractors/ ──► category.py ──► db.py ──► SQLite
-        (text +          (label-anchored   (keyword         (dedupe on
-         REDACTION)       regex profiles)   rules)           invoice_no+VKN)
-                                                                  │
-                                                     ┌────────────┴───────┐
-                             --ask ──► router.py ────┤                    │
-                                    (intent + slots) │                    │
-                                            │        │                    │
-                              aggregate ────┘        │              --stats
-                                   │                 │                    │
-                                   ▼                 ▼                    ▼
-                              stats.py           rag.py               stats.py
-                          (SQL + pandas,   (embed → cosine →      (SQL + pandas,
-                             no LLM)        grounded answer)          no LLM)
+PDF ─► pdf_text.py ─► extractors/ ─► category.py ─► db.py ─► SQLite
+       (text +        (label-anchored  (keywords +   (dedupe on
+        REDACTION)     regex profiles)  classifier)   no + VKN + client)
+                                                          │
+        ┌─────────────────────────────────────────────────┤
+        │                                                 │
+   compliance.py        hesap.py            router.py ────┴──── stats.py
+   (deadlines,          (Tekdüzen           (intent + slots)    (aggregates)
+    document gaps)       journal, export)         │
+                                            agent.py ─► foundry.py ─► Foundry Local
+                                            (grounding)             (qwen3-4b)
 ```
 
-| Module | Responsibility |
-|---|---|
-| `pdf_text.py` | pdfplumber extraction; **redaction happens here** |
-| `normalize.py` | Turkish number/date/rate parsing |
-| `extractors/` | Per-issuer profiles over a generic GİB fallback |
-| `items.py` | Locates the line-item table |
-| `category.py` | Keyword classifier, optional LLM fallback |
-| `db.py` | SQLite schema and idempotent insert |
-| `router.py` | Classifies a question; routes arithmetic to SQL |
-| `rag.py` | Summary → embedding → cosine retrieval → answer |
-| `stats.py` | Aggregates, computed with SQL/pandas |
-| `agent.py` | Conversation: SQL supplies the facts, the model phrases them |
-| `api.py` | JSON API for `--serve`; thin — calls the modules above, adds nothing |
+Redaction happens at the parser boundary, before text reaches the database, the
+embeddings or any model. Removed: buyer TCKN, addresses, IBANs, emails, phone numbers.
+Kept: the seller's VKN, which is needed to group spend by legal entity.
 
-## Design decisions
-
-**Extraction is rule-based, not LLM-based.** e-Arşiv invoices are generated from a
-standardized GİB template, so field labels are stable and label-anchored regex reads
-them deterministically. A small local model asked to copy digits will eventually copy
-them wrong, and silently. The LLM's only extraction job is `category`, which is the one
-field genuinely not printed on the document.
-
-**Redaction happens in the PDF parser, not in the prompt.** TC Kimlik No, addresses,
-IBANs, card numbers, phone numbers, the recipient's name and the *buyer's* tax number
-are removed before the text reaches any model, the database or the embedding store.
-Asking a model to ignore a national ID is a request; deleting the bytes is a guarantee.
-TCKN removal is checksum-validated so it strips real IDs without eating order
-references. Add literal terms (your own name, your VKN) to `redact.txt` or
-`MALIMUSAVIR_REDACT` — no heuristic reliably recognises an arbitrary personal name.
-
-**`vendor_tax_id` is the seller's.** Buyer and courier tax numbers appear on the same
-page and are explicitly excluded; storing the buyer's would be both wrong and a
-privacy leak.
-
-**Categories are a closed set.** Free-form category generation produces a long tail of
-near-duplicates ("elektronik", "Elektronik ürün", "teknoloji") that makes spend-by-
-category meaningless.
-
-**Aggregates never go through the LLM.** "How much did I spend" has one correct answer,
-and arithmetic is not a language task. `router.py` recognises those questions and
-answers them from SQL, so every figure shown is computed rather than generated. The
-router is rule-based for the same reason extraction is: the vocabulary is enumerable,
-matching is exact, and a misrouted question yields a confidently wrong answer. Anything
-it does not recognise falls through to search, so it can only add precision.
-
-**Ambiguity is reported, not resolved silently.** "Turkcell'e ne kadar ödedim" names two
-legal entities; the answer covers both and says so, rather than picking one.
-
-**One row per invoice.** Line items are parsed for retrieval but not stored as rows;
-every aggregate here operates at invoice level.
-
-## Known limitations
-
-These are measured on real invoices, not assumed.
-
-**LLM category inference is unreliable on CPU.** Across three prompt designs, `qwen3-4b`
-classified 1 of 6 held-out vendors correctly (a hairdresser came back as `abonelik`, a
-plant nursery as `enerji`), at ~30s per call. The keyword table carries accuracy
-instead; the model is opt-in via `--llm-category` and anything it produces is flagged
-`category:llm_unverified`. Unmatched vendors land in `diğer` for review — honest rather
-than confidently wrong. Widening `KEYWORD_RULES` in `category.py` is the better fix.
-
-**Semantic search only handles item questions.** Retrieval works when the question names
-something concrete: "vidalama seti aldığım fatura" returns the right invoice with a
-clear margin. It cannot answer questions that are really database queries — those go
-through the router instead. Phrasings the router does not recognise still reach search,
-so an unusually worded aggregate question can still produce a wrong answer; `--explain`
-shows which path a question took.
-
-**Verify search answers against the sources printed beneath them.** `qwen3-4b` sometimes
-mixes fields between retrieved invoices — naming one vendor with another's total. `--ask`
-therefore always prints the retrieved invoices with their real dates and amounts, and
-those figures come straight from the database. Expect 40–70s per search answer on CPU;
-routed answers are instant.
-
-**Telecom `net_amount` is derived**, as `total − tax`, because these bills carry no
-net line. It is marked `:derived` in `field_sources`, and the reconcile cross-check
-cannot validate those rows.
-
-**Turkcell/Superonline PDFs are "bilgilendirme" documents**, not the legal e-Faturas —
-they say so on the page. The figures are accurate; the binding documents live in the
-GİB portal.
-
-## Out of scope
-
-Deliberate omissions, not oversights:
-
-- **OCR.** Digital PDFs only. Scanned files are flagged `scanned:no_extractable_text`
-  rather than silently producing an empty invoice. Adding Tesseract would introduce a
-  second, much noisier accuracy problem on top of a solved one.
-- **File reorganization.** Renaming or moving invoice files is destructive and needs a
-  plan → confirm → execute flow to be safe.
-- **Line-item storage.** Add it if per-product questions become a goal.
-
-A GUI was originally out of scope for the same reason as the others — the CLI covered
-the task and a UI adds surface area for no functional gain. That changed only because
-a UI became something the user separately wanted to look at, not because the original
-reasoning was wrong; `--serve` reuses every existing module as-is rather than growing a
-second implementation of anything.
+---
 
 ## Tests
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m pytest                    # everything
+.\.venv\Scripts\python.exe -m pytest tests/test_ui.py   # browser only
+.\.venv\Scripts\python.exe scripts\eval_agent.py        # assistant, needs Foundry
 ```
 
-Fixtures are redacted invoice *text*, never PDFs, so nothing personal is committed.
-`tests/test_real_layouts.py` holds one regression case per defect found against real
-documents — each reproduces a layout quirk that broke extraction or leaked data.
+**580 tests, 90% line coverage** over `malimusavir/`.
+
+26 of them drive the dashboard in a real browser (Playwright — after installing, run
+`python -m playwright install chromium`). Those exist because every UI regression this
+project has had was invisible to the Python suite: a preview pane that rendered at
+208×157px inside the tree rail, a tab panel nested where its condition could never be
+true, a search box 929px down a 720px viewport. All three parsed cleanly. What they broke
+was geometry and reachability, so that is what the browser tests assert.
+
+---
+
+## Known limitations
+
+Worth reading before trusting it with a real practice.
+
+- **Beyannameler are stored, not parsed.** Only the tahakkuk fişi has an extractor. A
+  beyanname is listed and openable, flagged `beyanname:not_parsed`, and no figure is
+  claimed from it. Fixing this needs a real KDV1/MUHSGK output to check against.
+- **Bank statements are stored, not read.** Reconciliation — matching payments against
+  invoices — is the obvious next feature and does not exist.
+- **Categories are not a chart of accounts.** `market`, `yeme-içme` and friends are
+  inherited from an earlier single-user design. They feed the hesap kodu defaults, but a
+  practice posting in earnest should set supplier rules instead.
+- **Extraction is checkpointed against a handful of real documents.** Every real document
+  seen so far has found a bug that synthetic ones could not — a TCKN the redactor
+  preserved, a receipt serial read as a VKN, a buyer read as the seller. Assume more are
+  waiting.
+- **OCR is out of scope.** A scanned PDF with no text layer is flagged
+  `scanned:no_extractable_text`, not guessed at.
+- **No GİB or e-Fatura integration**, deliberately: it would need credentials and a
+  server round-trip, which breaks the local-only guarantee that is the point.
+- **Single user, single machine.** No accounts, no sharing, no concurrent writers.
+
+## Licence
+
+None yet. Not published.
