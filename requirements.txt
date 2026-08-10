@@ -7,3 +7,8 @@ fastapi>=0.110
 uvicorn>=0.29
 python-multipart>=0.0.9
 scikit-learn>=1.5
+
+# UI tests. Drive the dashboard in a real browser -- every UI regression this
+# project has had was geometry or reachability, which no Python test could see.
+# After installing:  python -m playwright install chromium
+pytest-playwright>=0.8
