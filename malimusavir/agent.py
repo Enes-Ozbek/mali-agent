@@ -156,31 +156,6 @@ kopyalama. Sohbet geçmişi yalnızca bağlam içindir.
 Soru "hangisi", "hangi", "kim" ya da "ne zaman" diye soruyorsa verideki satıcı adını
 ve tarihi mutlaka yaz -- tek başına tutar bu soruların cevabı değildir."""
 
-#: Used when the computed answer is a table or has several clauses that each carry a
-#: figure. Measured against qwen3-4b: with the plain template above, the full monthly
-#: breakdown came back as "Aylık harcama, tüm müşterilerin aylık faturalarının
-#: toplamıdır" -- a definition of the term with no data in it -- and a KDV position
-#: came back with the payable figure but without the carried-forward one. Naming the
-#: completeness requirement, and forbidding the definition-instead-of-data failure by
-#: example, is what makes the model keep them.
-_GROUNDED_TABLE = """HESAPLANAN VERİ (veritabanından, doğrudur):
-{facts}
-
-Kullanıcının ŞU ANKİ sorusu: {question}
-
-Bu veriyi Türkçe olarak aktar. Kurallar:
-- Önceki yanıtını tekrarlama; cevap yukarıdaki HESAPLANAN VERİ'dedir.
-- Verideki HER satırı ve HER rakamı yanıtına dahil et. Hiçbirini atlama, özetleme
-  veya "vb." deyip geçme.
-- İLK satırdaki özet/toplam bilgisini de mutlaka yaz. Kullanıcı "ne kadar" diye
-  sorduysa aradığı rakam çoğunlukla oradadır; sadece satırları listeleyip toplamı
-  atlamak soruyu yanıtsız bırakır.
-- Rakamları aynen kopyala; yeniden hesaplama, toplama veya yuvarlama yapma.
-- Terimin tanımını yazma. "Aylık harcama, faturaların toplamıdır" gibi bir açıklama
-  yanlış bir yanıttır — kullanıcı tanımı değil, yukarıdaki rakamları istiyor.
-- Kısa bir giriş cümlesi yaz, sonra her satırı "- " ile başlayan ayrı bir satıra koy.
-- DÜZ METİN: yıldız (*), kalın yazı veya başlık kullanma. Başlıkları tekrarlama."""
-
 #: One line, several figures -- the KDV position. Keeps the completeness rule that
 #: stopped qwen3-4b dropping the devreden figure, and drops the layout rule that made
 #: it bullet a sentence apart. Copying punctuation exactly is spelled out because the
@@ -410,32 +385,6 @@ def _is_tabular(computed: router.Answer) -> bool:
     return computed.intent in TABULAR_INTENTS or "\n" in computed.text
 
 
-def _restore_summary_line(phrased: str, computed: router.Answer) -> str:
-    """Put back the computed answer's opening total when the model drops it.
-
-    Measured across every tabular question: qwen3-4b reproduces the rows faithfully
-    and omits the header line's figure -- "Kategoriye göre (toplam 618.892,00 TL):"
-    loses the 618.892,00 while all four category rows survive. The prompt asks for that
-    figure in as many words ("İLK satırdaki özet/toplam bilgisini de mutlaka yaz") and
-    it is dropped anyway; this is the third instruction the model has ignored, so it is
-    restored rather than asked for again.
-
-    A user asking "hangi satıcıya ne kadar ödendi" and getting a list with no total has
-    to add eight numbers by hand to check the answer -- which is the work this is meant
-    to remove.
-
-    The line is copied from the computed answer, so the digits come from SQL exactly as
-    every other figure does. Nothing the model wrote is altered or removed.
-    """
-    head, _, rest = computed.text.partition("\n")
-    if not rest.strip():
-        return phrased
-    missing = [a for a in _AMOUNT.findall(head) if a not in phrased]
-    if not missing:
-        return phrased
-    return f"{head.rstrip()}\n{phrased.lstrip()}"
-
-
 def _is_multi_figure(computed: router.Answer) -> bool:
     """One line, several numbers -- the KDV position, and nothing else so far.
 
@@ -549,15 +498,24 @@ def answer(
         # Measured: the model turned "this panel covers Zeynep, ask on Canan's page"
         # into "that information is not in the invoices", which is a different and
         # false claim. Returned unchanged, the same way capabilities() is.
-        if computed.verbatim or not use_llm:
+        # A table of rows is data, not wording, and the model must not retype it.
+        # Asked to reproduce nine overdue filings, qwen3-4b returned a KDV 2026-02
+        # filing for Kaya Yapı -- a client who has 2026-01 and 2026-04 and nothing in
+        # between -- while dropping Zirve's real 12.450,75 MUHTASAR and Canan's 360,00.
+        # It invented a tax liability and hid two others in the same answer.
+        #
+        # Everything already tried to prevent that was a request the model could
+        # decline: reproduce every row, keep the total, do not summarise. Rows now
+        # bypass the model entirely, which makes the failure impossible rather than
+        # unlikely. It also makes the slowest answers instant, since these are the ones
+        # that carried a 1200-token budget.
+        #
+        # Prose answers still go through it. One figure in a sentence is checkable at a
+        # glance and is where phrasing actually helps.
+        if computed.verbatim or not use_llm or _is_tabular(computed):
             return AgentReply(computed.text, "router", computed.intent.value,
                               facts=computed.text)
-        if _is_tabular(computed):
-            template = _GROUNDED_TABLE
-        elif _is_multi_figure(computed):
-            template = _GROUNDED_FIGURES
-        else:
-            template = _GROUNDED
+        template = _GROUNDED_FIGURES if _is_multi_figure(computed) else _GROUNDED
         try:
             phrased = foundry.chat_turns(
                 turns + [{
@@ -565,17 +523,14 @@ def answer(
                     "content": template.format(facts=computed.text, question=question),
                 }],
                 system=_system_prompt(),
-                # A table needs room. The default cut multi-row answers short, which
-                # looked like the model omitting rows when it was simply stopped.
-                max_tokens=1200 if _is_tabular(computed) else 700,
+                max_tokens=700,
             )
         except foundry.FoundryError:
             # The numbers are already correct without the model; degrade to them
             # rather than failing the request outright.
             return AgentReply(computed.text, "router", computed.intent.value,
                               facts=computed.text)
-        text = plain_text(phrased, question) or computed.text
-        return AgentReply(_restore_summary_line(text, computed), "router+llm",
+        return AgentReply(plain_text(phrased, question) or computed.text, "router+llm",
                           computed.intent.value, facts=computed.text)
 
     # Not an aggregate. Retrieval decides which of two very different things this is:

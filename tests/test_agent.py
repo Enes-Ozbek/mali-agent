@@ -479,11 +479,24 @@ def test_a_prose_answer_is_never_given_the_table_layout_rule(conn, spy):
     assert "HER rakamı" in prompt
 
 
-def test_a_table_answer_still_gets_the_completeness_and_layout_rules(conn, spy):
-    agent.answer(conn, "kategorilere göre dağılım nedir")
-    prompt = _prompt_of(spy)
-    assert "HER satırı" in prompt
-    assert 'her satırı "- " ile başlayan' in prompt
+def test_a_table_answer_never_reaches_the_model(conn, spy):
+    """Rows are data, and the model must not retype them.
+
+    Asked to reproduce nine overdue filings, qwen3-4b returned a KDV 2026-02 filing for
+    a client who has 2026-01 and 2026-04 and nothing between them, and dropped two real
+    ones in the same answer -- inventing a tax liability while hiding 12.450,75 TL that
+    someone genuinely owed. Every earlier guard was a request the model could decline.
+    """
+    reply = agent.answer(conn, "kategorilere göre dağılım nedir")
+    assert spy == [], "a table was sent to the model to retype"
+    assert reply.source == "router"
+
+
+def test_a_table_answer_is_exactly_what_sql_computed(conn):
+    """Byte-identical, so no row can be added, lost or altered on the way out."""
+    computed = router.route(conn, "kategorilere göre dağılım nedir")
+    reply = agent.answer(conn, "kategorilere göre dağılım nedir")
+    assert reply.text == computed.text
 
 
 def test_a_single_figure_answer_gets_the_plain_template(conn, spy):
@@ -543,37 +556,13 @@ def test_ordinary_brackets_and_similar_openings_survive():
 # --- the summary line a table answer must keep -----------------------------------
 
 
-def test_a_dropped_table_total_is_restored(conn, monkeypatch):
-    """Across every tabular question qwen3-4b reproduced the rows and dropped the
-    header total: "Kategoriye göre (toplam 2.422,82 TL):" lost its figure while all the
-    category rows survived. A vendor list with no total makes the reader add the column
-    up by hand, which is the work this is supposed to remove."""
-    monkeypatch.setattr(foundry, "chat_turns",
-                        lambda messages, **kw: "- telekom  1.770,00 TL  (5 fatura)\n"
-                                               "- ev         652,82 TL  (1 fatura)")
-    reply = agent.answer(conn, "kategorilere göre dağılım nedir")
-    computed_total = router.route(conn, "kategorilere göre dağılım nedir").text
-    total = re.search(r"\d[\d.]*,\d{2}", computed_total).group(0)
-    assert total in reply.text, (
-        f"the computed total {total} vanished from the reply: {reply.text!r}")
-    assert "telekom" in reply.text, "the model's own rows must survive untouched"
-
-
-def test_a_total_the_model_kept_is_not_repeated(conn, monkeypatch):
-    """The line is only put back when it is actually missing."""
-    computed = router.route(conn, "kategorilere göre dağılım nedir").text
-    monkeypatch.setattr(foundry, "chat_turns", lambda messages, **kw: computed)
-    reply = agent.answer(conn, "kategorilere göre dağılım nedir")
-    total = re.search(r"\d[\d.]*,\d{2}", computed).group(0)
-    assert reply.text.count(total) == computed.count(total)
-
-
-def test_a_single_line_answer_is_never_prefixed(conn, monkeypatch):
-    """A one-line computed answer has no header to restore -- prepending it would just
-    print the whole thing twice."""
+def test_a_prose_answer_still_goes_through_the_model(conn, monkeypatch):
+    """Only rows bypass it. A single figure in a sentence is checkable at a glance, and
+    phrasing is worth having there."""
     monkeypatch.setattr(foundry, "chat_turns", lambda messages, **kw: "Altı fatura var.")
     reply = agent.answer(conn, "kaç fatura var")
     assert reply.text == "Altı fatura var."
+    assert reply.source == "router+llm"
 
 
 # --- suggestions are scoped to whose books are open ------------------------------
