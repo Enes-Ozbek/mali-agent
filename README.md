@@ -226,6 +226,18 @@ Things learned by measurement and encoded here:
   "En son ne zaman alışveriş yaptım?" and the greeting said "N faturanız yüklü" — wording
   inherited from when this tracked one person's own spending. An accountant does not go
   shopping in a client's ledger. A test now fails on first-person phrasing.
+- **Which template an answer gets is decided by its shape, not by a list of intents.**
+  The KDV position was listed as tabular while its wording was a single sentence, so it
+  received a rule ending "put each row on its own line" and had no rows: qwen3-4b
+  bulleted the sentence apart, wrote "5 müşteri))", shouted the closing caveat, and
+  pasted the prompt scaffold into the reply. The figures were right throughout, which is
+  why no numeric check saw it.
+- **Anything the model reliably drops is restored in code, not asked for again.** Three
+  prompt instructions were measured as ignored: keep every row's layout, keep warning
+  sentences that carry no figure, and keep the table's header total — that last one
+  missing in four runs out of five, leaving a vendor list the reader has to add up by
+  hand. The total is put back from the computed answer, so its digits still come from
+  SQL.
 
 `scripts/eval_agent.py` asks 23 questions whose answers SQL already knows, checking route,
 facts and answer separately — so a routing bug is distinguishable from the model mangling a
@@ -270,7 +282,7 @@ Measured alternatives it replaced, on 6 held-out vendors: `qwen3-4b` generative 
 .\.venv\Scripts\python.exe scripts\eval_agent.py        # assistant, needs Foundry
 ```
 
-**587 tests, 88% line coverage** over `malimusavir/`.
+**600 tests, 90% line coverage** over `malimusavir/`.
 
 29 of them drive the dashboard in a real browser (Playwright — after installing, run
 `python -m playwright install chromium`). Those exist because every UI regression this
@@ -299,9 +311,13 @@ Worth reading before trusting it with a real practice.
 - **Extraction is checkpointed against a handful of real documents.** Every real document
   seen so far has found a bug that synthetic ones could not — a TCKN the redactor preserved,
   a receipt serial read as a VKN, a buyer read as the seller. Assume more are waiting.
-- **The model drops the occasional row when rephrasing a long table.** qwen3-4b is a 4B
-  model; measured at 8 of 9 rows on a deadline list. The computed answer is printed under
-  every reply for exactly this reason — check it when the list is long.
+- **The model still drops supporting detail on single-figure answers.** qwen3-4b is a 4B
+  model rephrasing dense Turkish tables. Asked "toplam tutar ne kadar" it answers
+  "618.892,00 TL" and drops the date range; it occasionally mangles a word ("fattır"
+  for "faturadır"). Measured over all 20 advertised questions, 14 come back with every
+  figure intact and all 20 answer the question correctly. Table answers are the ones
+  that matter most and are now clean. The computed answer is printed under every reply
+  for exactly this reason, and Hızlı mode skips the model entirely.
 - **OCR is out of scope.** A scanned PDF with no text layer is flagged
   `scanned:no_extractable_text`, not guessed at.
 - **No GİB or e-Fatura integration**, deliberately: it would need credentials and a server
