@@ -361,6 +361,32 @@ def _is_tabular(computed: router.Answer) -> bool:
     return computed.intent in TABULAR_INTENTS or "\n" in computed.text
 
 
+def _restore_summary_line(phrased: str, computed: router.Answer) -> str:
+    """Put back the computed answer's opening total when the model drops it.
+
+    Measured across every tabular question: qwen3-4b reproduces the rows faithfully
+    and omits the header line's figure -- "Kategoriye göre (toplam 618.892,00 TL):"
+    loses the 618.892,00 while all four category rows survive. The prompt asks for that
+    figure in as many words ("İLK satırdaki özet/toplam bilgisini de mutlaka yaz") and
+    it is dropped anyway; this is the third instruction the model has ignored, so it is
+    restored rather than asked for again.
+
+    A user asking "hangi satıcıya ne kadar ödendi" and getting a list with no total has
+    to add eight numbers by hand to check the answer -- which is the work this is meant
+    to remove.
+
+    The line is copied from the computed answer, so the digits come from SQL exactly as
+    every other figure does. Nothing the model wrote is altered or removed.
+    """
+    head, _, rest = computed.text.partition("\n")
+    if not rest.strip():
+        return phrased
+    missing = [a for a in _AMOUNT.findall(head) if a not in phrased]
+    if not missing:
+        return phrased
+    return f"{head.rstrip()}\n{phrased.lstrip()}"
+
+
 def _is_multi_figure(computed: router.Answer) -> bool:
     """One line, several numbers -- the KDV position, and nothing else so far.
 
@@ -499,7 +525,8 @@ def answer(
             # rather than failing the request outright.
             return AgentReply(computed.text, "router", computed.intent.value,
                               facts=computed.text)
-        return AgentReply(plain_text(phrased, question) or computed.text, "router+llm",
+        text = plain_text(phrased, question) or computed.text
+        return AgentReply(_restore_summary_line(text, computed), "router+llm",
                           computed.intent.value, facts=computed.text)
 
     # Not an aggregate. Retrieval decides which of two very different things this is:

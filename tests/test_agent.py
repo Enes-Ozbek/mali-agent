@@ -538,3 +538,39 @@ def test_ordinary_brackets_and_similar_openings_survive():
     opener = agent.plain_text("Toplam KDV toplamda 101.692,00 TL tuttu.",
                               "Toplam KDV ne kadar?")
     assert opener == "Toplam KDV toplamda 101.692,00 TL tuttu."
+
+
+# --- the summary line a table answer must keep -----------------------------------
+
+
+def test_a_dropped_table_total_is_restored(conn, monkeypatch):
+    """Across every tabular question qwen3-4b reproduced the rows and dropped the
+    header total: "Kategoriye göre (toplam 2.422,82 TL):" lost its figure while all the
+    category rows survived. A vendor list with no total makes the reader add the column
+    up by hand, which is the work this is supposed to remove."""
+    monkeypatch.setattr(foundry, "chat_turns",
+                        lambda messages, **kw: "- telekom  1.770,00 TL  (5 fatura)\n"
+                                               "- ev         652,82 TL  (1 fatura)")
+    reply = agent.answer(conn, "kategorilere göre dağılım nedir")
+    computed_total = router.route(conn, "kategorilere göre dağılım nedir").text
+    total = re.search(r"\d[\d.]*,\d{2}", computed_total).group(0)
+    assert total in reply.text, (
+        f"the computed total {total} vanished from the reply: {reply.text!r}")
+    assert "telekom" in reply.text, "the model's own rows must survive untouched"
+
+
+def test_a_total_the_model_kept_is_not_repeated(conn, monkeypatch):
+    """The line is only put back when it is actually missing."""
+    computed = router.route(conn, "kategorilere göre dağılım nedir").text
+    monkeypatch.setattr(foundry, "chat_turns", lambda messages, **kw: computed)
+    reply = agent.answer(conn, "kategorilere göre dağılım nedir")
+    total = re.search(r"\d[\d.]*,\d{2}", computed).group(0)
+    assert reply.text.count(total) == computed.count(total)
+
+
+def test_a_single_line_answer_is_never_prefixed(conn, monkeypatch):
+    """A one-line computed answer has no header to restore -- prepending it would just
+    print the whole thing twice."""
+    monkeypatch.setattr(foundry, "chat_turns", lambda messages, **kw: "Altı fatura var.")
+    reply = agent.answer(conn, "kaç fatura var")
+    assert reply.text == "Altı fatura var."
