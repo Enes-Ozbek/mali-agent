@@ -55,31 +55,39 @@ RELEVANCE_SPREAD_MIN = 0.04
 #: version listed abilities as nouns ("en yüksek tutarlı fatura") and the model read
 #: the list as a menu of statistics awaiting values -- then invented them, reporting a
 #: fabricated "1.234,56 TL" maximum. A question cannot be filled in with a fake answer.
+#: Written in the third person, about a client's books. They used to read "En son ne
+#: zaman alışveriş yaptım?" and "Kaç faturam var?" -- leftovers from when this tool
+#: tracked one person's own spending. An accountant does not go shopping in their
+#: clients' ledgers, and a suggestion list that talks that way tells the user the tool
+#: was built for someone else.
 CAPABILITY_LABELS: dict[router.Intent, str] = {
-    router.Intent.TOTAL: "Toplam ne kadar harcadım?",
-    router.Intent.TAX: "Ne kadar KDV ödedim?",
     router.Intent.VAT_POSITION: "Ödenecek KDV ne kadar?",
     router.Intent.INCOME: "Toplam gelir ne kadar?",
     router.Intent.EXPENSE: "Toplam gider ne kadar?",
+    router.Intent.TAX: "Toplam KDV ne kadar?",
+    router.Intent.TOTAL: "Toplam tutar ne kadar?",
+    router.Intent.COUNT: "Kaç fatura var?",
     router.Intent.DECLARATION: "Tahakkuk fişleri ne durumda?",
+    router.Intent.DEADLINE: "Hangi müşterinin vadesi geçti?",
+    router.Intent.GAP: "Hangi müşteride eksik belge var?",
+    router.Intent.BY_CLIENT: "Müşteri bazında dağılım nedir?",
     router.Intent.DOCUMENT: "Vergi levhası hangi klasörde?",
-    router.Intent.COUNT: "Kaç faturam var?",
-    router.Intent.LAST: "En son ne zaman alışveriş yaptım?",
-    router.Intent.FIRST: "İlk faturam ne zaman?",
-    router.Intent.LARGEST: "En pahalı faturam hangisi?",
-    router.Intent.SMALLEST: "En ucuz faturam hangisi?",
-    router.Intent.BY_CATEGORY: "Kategorilere göre ne kadar harcadım?",
-    router.Intent.BY_VENDOR: "Hangi firmaya ne kadar ödedim?",
-    router.Intent.BY_MONTH: "Aylık harcamam nedir?",
-    router.Intent.RECURRING: "Düzenli ödemelerim neler?",
-    router.Intent.LIST: "Telekom faturalarını listele",
+    router.Intent.LIST: "Gider faturalarını listele",
+    router.Intent.BY_CATEGORY: "Kategorilere göre dağılım nedir?",
+    router.Intent.BY_VENDOR: "Hangi satıcıya ne kadar ödendi?",
+    router.Intent.BY_MONTH: "Aylık dağılım nedir?",
+    router.Intent.RECURRING: "Düzenli ödemeler neler?",
+    router.Intent.LARGEST: "En pahalı fatura hangisi?",
+    router.Intent.SMALLEST: "En ucuz fatura hangisi?",
+    router.Intent.LAST: "En son fatura ne zaman?",
+    router.Intent.FIRST: "İlk fatura ne zaman?",
     # SEMANTIC is not asked for by name -- it is the fallback that searches line items,
     # described separately in capabilities() below.
     router.Intent.SEMANTIC: "",
 }
 
-_SYSTEM_BASE = """Sen bir Türk mali müşavir asistanısın. Kullanıcının kendi faturaları
-üzerinde çalışıyorsun.
+_SYSTEM_BASE = """Sen bir Türk mali müşavir bürosunun asistanısın. Kullanıcı mali
+müşavirdir; incelediğin belgeler onun MÜŞTERİLERİNE aittir, kendisine değil.
 
 Kurallar:
 - Sana "HESAPLANAN VERİ" olarak verilen sayılar veritabanından gelir ve DOĞRUDUR.
@@ -93,9 +101,8 @@ Kurallar:
 - HESAPLANAN VERİ'deki parantez içi KAPSAMI aynen koru. Veri "tüm müşteriler"
   kapsamındaysa rakamı tek bir müşteriye ATFETME; "tüm müşteriler toplamında" de.
   Veri bir müşteri adı taşıyorsa yanıtta o adı kullan, başka bir ad uydurma.
-- Kullanıcı bir mali müşavirdir; faturalar onun müşterilerine aittir. Bir müşteri
-  adı verildiyse üçüncü şahıs kullan ("Canan Aydın ... ödemiş"). Asla "ödedim"
-  veya "harcadım" deme."""
+- Bir müşteri adı verildiyse üçüncü şahıs kullan ("Canan Aydın ... ödemiş").
+  Asla "ödedim", "harcadım" veya "faturanız" deme -- belgeler kullanıcının değil."""
 
 _GROUNDED = """HESAPLANAN VERİ (veritabanından, doğrudur):
 {facts}
@@ -251,25 +258,32 @@ def capabilities(conn: sqlite3.Connection, client_id: int | str | None = None) -
     frame = stats.load_frame(conn, client_id=client_id)
     summary = stats.totals(frame)
 
+    # Says whose books are in scope. The greeting used to read "N faturanız yüklü" --
+    # "your invoices" -- to a user whose invoices these are not.
+    scoped = client_id is not None and client_id != stats.UNASSIGNED
+    whose = "Bu müşteride" if scoped else "Büro genelinde"
+
     if summary.invoices:
         cats = sorted(c for c in frame["category"].dropna().unique())
         data = (
-            f"Merhaba. {summary.invoices} faturanız yüklü "
+            f"Merhaba. {whose} {summary.invoices} fatura kayıtlı "
             f"({summary.first_date} - {summary.last_date} arası), "
             f"{frame['vendor'].dropna().nunique()} farklı satıcıdan, "
             f"toplam {format_tr_amount(summary.total)} TL. "
             f"Kategoriler: {', '.join(cats)}."
         )
     else:
-        data = "Merhaba. Henüz yüklenmiş fatura yok."
+        data = (f"Merhaba. {whose} henüz kayıtlı fatura yok."
+                if scoped else
+                "Merhaba. Henüz kayıtlı fatura yok.")
 
     examples = "\n".join(f"  • {label}" for label in CAPABILITY_LABELS.values() if label)
     return (
         f"{data}\n\n"
         f"Şunları sorabilirsiniz:\n{examples}\n"
-        "  • \"Vidalama seti hangi faturada?\" gibi ürün aramaları\n\n"
-        "Bir soruyu yanıtladığımda sayılar veritabanından hesaplanır — tahmin "
-        "etmem. Yeni fatura eklemek için soldaki \"PDF bırak\" alanını kullanın."
+        "  • Ürün ya da kalem adı yazarak hangi faturada geçtiğini bulabilirsiniz\n\n"
+        "Sayılar veritabanından hesaplanır — tahmin etmem. Belge eklemek için arşivi "
+        "\"--ingest-archive\" ile yeniden tarayın."
     )
 
 
@@ -425,15 +439,18 @@ def answer(
 
     if not hits:
         return AgentReply(
-            "Henüz yüklenmiş fatura yok. Soldaki \"PDF bırak\" alanından e-Arşiv "
-            "faturalarınızı ekleyebilirsiniz.", "agent", "empty",
+            # Told the user to drop PDFs into a panel that does not exist -- ingest is
+            # a scan of the archive folder. And "faturalarınızı" addresses the wrong
+            # person: the documents belong to the clients, not to the müşavir.
+            "Kayıtlı fatura yok. Arşiv klasörünü \"--ingest-archive\" ile taratınca "
+            "belgeler buraya gelir.", "agent", "empty",
         )
 
     spread = (hits[0]["score"] - hits[-1]["score"]) if len(hits) > 1 else 1.0
     if spread < RELEVANCE_SPREAD_MIN:
         if not use_llm:
             return AgentReply(
-                "Bu soruyu faturalarınızdan yanıtlayamam.", "agent", "off_topic",
+                "Bu soruyu kayıtlı belgelerden yanıtlayamam.", "agent", "off_topic",
             )
         try:
             text = foundry.chat_turns(

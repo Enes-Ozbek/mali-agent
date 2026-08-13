@@ -8,7 +8,11 @@ hands your ledger software a yevmiye fişi.
 **Nothing leaves the machine.** All inference runs through
 [Foundry Local](https://learn.microsoft.com/azure/ai-foundry/foundry-local/); the web
 server and the model server both bind `127.0.0.1`. There are no calls to any model
-provider, and no telemetry.
+provider, and no telemetry. The front end is served entirely from disk too — React and
+the two web fonts are vendored under `web/vendor/` and `web/_ds/*/fonts/` rather than
+pulled from a CDN, so the dashboard opens with the network unplugged. Two browser tests
+hold that line: one fails if any request leaves `127.0.0.1`, one loads the page with all
+off-machine traffic blocked and checks the board still renders.
 
 It is a companion to Luca/Zirve/Mikro, not a replacement. Those are where you post
 entries and file declarations. This is where you find the paperwork, see what is due, and
@@ -206,6 +210,15 @@ Things learned by measurement and encoded here:
   claim.
 - **Tables get a completeness instruction and a larger token budget.** Given the full
   monthly breakdown, the model once replied with a *definition* of the term and no data.
+- **It is written for the müşavir, not for the taxpayer.** The suggestion list used to
+  offer "En son ne zaman alışveriş yaptım?" and the greeting said "N faturanız yüklü" —
+  wording inherited from when this tracked one person's own spending. An accountant does
+  not go shopping in a client's ledger. Suggestions are third-person now, and a test
+  fails on first-person phrasing.
+
+It can also answer from the compliance data, not just the invoice tables: "hangi
+müşterinin vadesi geçti", "hangi müşteride eksik belge var" and "müşteri bazında dağılım"
+read the same `compliance.py` the Gündem board does, so the two can never disagree.
 
 `scripts/eval_agent.py` asks 23 questions whose answers SQL already knows, checking
 route, facts and answer separately — so a routing bug is distinguishable from the model
@@ -243,14 +256,17 @@ Kept: the seller's VKN, which is needed to group spend by legal entity.
 .\.venv\Scripts\python.exe scripts\eval_agent.py        # assistant, needs Foundry
 ```
 
-**580 tests, 90% line coverage** over `malimusavir/`.
+**587 tests, 88% line coverage** over `malimusavir/`.
 
-26 of them drive the dashboard in a real browser (Playwright — after installing, run
+29 of them drive the dashboard in a real browser (Playwright — after installing, run
 `python -m playwright install chromium`). Those exist because every UI regression this
 project has had was invisible to the Python suite: a preview pane that rendered at
 208×157px inside the tree rail, a tab panel nested where its condition could never be
-true, a search box 929px down a 720px viewport. All three parsed cleanly. What they broke
-was geometry and reachability, so that is what the browser tests assert.
+true, a search box 929px down a 720px viewport, an `<iframe src="{{ preview.url }}">`
+that made the browser fetch the literal template and 404 on every load. All of them
+parsed cleanly. What they broke was geometry, reachability and network behaviour, so
+that is what the browser tests assert — including that no request leaves `127.0.0.1`
+and that the page still renders with all off-machine traffic blocked.
 
 ---
 

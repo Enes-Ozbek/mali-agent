@@ -348,3 +348,52 @@ def test_the_back_link_returns_to_the_list(page):
     open_client(page, "Zeynep Çelik")
     page.locator("button", has_text="← Müşteriler").click()
     expect(page.locator("text=Gündem")).to_be_visible()
+
+
+# --- the local-only guarantee -----------------------------------------------------------
+
+
+def test_the_dashboard_makes_no_request_off_the_machine(server, browser):
+    """The headline promise is that nothing leaves the machine, and it was not true:
+    index.html pulled React and ReactDOM from unpkg.com and the design system @imported
+    Cormorant Garamond and Lora from fonts.googleapis.com. Four requests per launch,
+    invisible because the test machine had a network."""
+    context = browser.new_context(viewport={"width": 1280, "height": 720})
+    page = context.new_page()
+    seen: list[str] = []
+    page.on("request", lambda r: seen.append(r.url))
+    page.goto(server, wait_until="networkidle")
+    page.wait_for_selector(".crow")
+    external = [u for u in seen
+                if not u.startswith(server.rstrip("/")) and not u.startswith("data:")]
+    context.close()
+    assert not external, f"requests left the machine: {external}"
+
+
+def test_the_dashboard_renders_with_no_network_at_all(server, browser):
+    """Blocking off-machine traffic used to leave a completely blank page -- body length
+    zero, no error, nothing. That is the state of a firewalled office PC, and it is the
+    one environment this tool is meant for."""
+    context = browser.new_context(viewport={"width": 1280, "height": 720})
+    page = context.new_page()
+    page.route("**/*", lambda route, request: route.continue_()
+               if request.url.startswith(server.rstrip("/")) else route.abort())
+    page.goto(server, wait_until="networkidle")
+    page.wait_for_selector(".crow")
+    body = page.inner_text("body")
+    context.close()
+    assert "Gündem" in body, f"board missing with no network; body was {body[:200]!r}"
+
+
+def test_no_element_carries_an_unrendered_template_as_a_url(server, browser):
+    """The preview iframe shipped src="{{ preview.url }}" in live markup, so the browser
+    fetched the literal template and took a 404 on every single page load."""
+    context = browser.new_context(viewport={"width": 1280, "height": 720})
+    page = context.new_page()
+    failed: list[str] = []
+    page.on("response", lambda r: failed.append(f"{r.status} {r.url}")
+            if r.status >= 400 else None)
+    page.goto(server, wait_until="networkidle")
+    page.wait_for_selector(".crow")
+    context.close()
+    assert not failed, f"failing requests on load: {failed}"

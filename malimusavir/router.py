@@ -54,6 +54,12 @@ class Intent(str, Enum):
     INCOME = "income"          #: toplam gelir -- sales only
     EXPENSE = "expense"        #: toplam gider -- purchases only
     DECLARATION = "declaration"  #: tahakkuk fişi / beyanname
+    #: "which client is overdue" and "who is missing documents" -- the two questions the
+    #: dashboard leads with, and the two the assistant could not answer at all. Both
+    #: read compliance.py rather than the invoice frame.
+    DEADLINE = "deadline"
+    GAP = "gap"
+    BY_CLIENT = "by_client"      #: müşteri bazında dağılım
     DOCUMENT = "document"      #: vergi levhası, banka ekstresi, sözleşme
     LIST = "list"
     SEMANTIC = "semantic"      #: not an aggregate -- hand to RAG
@@ -62,6 +68,14 @@ class Intent(str, Enum):
 #: Checked in order; the first match wins, so specific phrases precede general ones.
 #: "en son ne zaman" must beat "ne kadar", and "en cok hangi kategori" must beat "en cok".
 INTENT_PATTERNS: tuple[tuple[Intent, tuple[str, ...]], ...] = (
+    # Gaps before deadlines: "eksik belge" is the more specific complaint, and before
+    # DOCUMENT, which would otherwise swallow "belge".
+    (Intent.GAP, ("eksik belge", "belgesi eksik", "eksik evrak", "eksigi olan",
+                  "tahakkuk fisi olmayan", "beyannamesi olmayan", "eksikler",
+                  "eksik olan", "belge eksigi")),
+    (Intent.DEADLINE, ("vadesi gecen", "vadesi gecmis", "vadesi gecti", "geciken",
+                       "son odeme", "yaklasan vade", "vade tarihi", "hangi vade",
+                       "vadesi yaklasan", "odeme takvimi", "vergi takvimi")),
     # Documents first: "vergi levhası nerede" contains "vergi", and TAX would otherwise
     # answer a "where is this document" question with a KDV figure.
     (Intent.DOCUMENT, ("vergi levhasi", "banka ekstre", "ekstre", "sozlesme", "ruhsat",
@@ -80,11 +94,13 @@ INTENT_PATTERNS: tuple[tuple[Intent, tuple[str, ...]], ...] = (
     (Intent.BY_MONTH, ("aylik", "aya gore", "aylara gore", "ay bazinda", "her ay ne kadar",
                        "hangi ay")),
     (Intent.BY_CATEGORY, ("kategori", "neye harcadi", "nelere harcadi")),
+    (Intent.BY_CLIENT, ("hangi musteri", "musteri bazinda", "musterilere gore",
+                        "musteri basina", "en cok hangi musteri")),
     (Intent.BY_VENDOR, ("hangi firma", "hangi satici", "firma bazinda", "satici bazinda",
                         "firmalara gore", "kime ne kadar", "en cok nereye")),
     (Intent.LAST, ("en son ne zaman", "son ne zaman", "en son alisveris", "en son fatura",
                    "son faturam", "en yeni fatura")),
-    (Intent.FIRST, ("ilk ne zaman", "en eski", "ilk faturam")),
+    (Intent.FIRST, ("ilk ne zaman", "en eski", "ilk faturam", "ilk fatura")),
     (Intent.LARGEST, ("en pahali", "en buyuk", "en yuksek", "en fazla tutar")),
     (Intent.SMALLEST, ("en ucuz", "en dusuk", "en kucuk")),
     (Intent.COUNT, ("kac fatura", "kac tane", "kac adet", "fatura sayisi", "kac faturam")),
@@ -434,6 +450,16 @@ def classify(question: str, *, vendors: list[str] | None = None,
         return Question(Intent.LIST, question, matched_vendors, category,
                         since, until, "liste", matched_clients, direction)
 
+    # A bare noun phrase -- "Canan Aydın'ın şubat faturaları" -- is a listing request
+    # even with no verb in it. Nobody says "listele" out loud when the phrase already
+    # names the invoices they want. Reaching here means no aggregate phrase matched, so
+    # there is no "ne kadar" or "kaç" to answer instead, and a content marker would
+    # already have kept it with semantic search.
+    if not asks_for_contents and any(w in folded for w in _INVOICE_WORDS) and (
+            matched_vendors or category or matched_clients or since or until):
+        return Question(Intent.LIST, question, matched_vendors, category,
+                        since, until, "liste", matched_clients, direction)
+
     return Question(Intent.SEMANTIC, question, matched_vendors, category, since, until,
                     None, matched_clients, direction)
 
@@ -539,6 +565,107 @@ def _assessed_vat(conn: sqlite3.Connection, parsed: Question,
     return float(row["total"]) if row["n"] else None
 
 
+def _deadlines_answer(conn: sqlite3.Connection, parsed: Question,
+                      client_id: int | str | None,
+                      client_label: str | None) -> Answer:
+    """Filing deadlines, the question the Gündem board leads with.
+
+    The board could answer "kimin vadesi geçti" and the assistant could not -- it fell
+    through to semantic search and came back off-topic. Same data, read through
+    compliance.py so the two can never disagree.
+
+    Wording follows the board's rule: nothing here records *payment*. A tahakkuk states
+    what was assessed, not whether it was settled, so this says "vadesi geçti" and
+    "tahakkuk eden" -- never "borcu var" or "ödenmemiş".
+    """
+    from . import compliance
+
+    rows = compliance.deadlines(conn, client_id=client_id)
+    scope = _scope(parsed, client_label)
+    if not rows:
+        return Answer(f"Vadesi belli bir tahakkuk kaydı yok{scope}.", [], parsed.intent)
+
+    late = [d for d in rows if d.bucket == "gecikmis"]
+    soon = [d for d in rows if d.bucket != "gecikmis"]
+    shown = late or soon
+    total = round(sum(d.payable or 0 for d in shown), 2)
+
+    head = (f"{len(late)} tahakkuk kaydının vadesi geçti{scope}"
+            if late else f"Vadesi geçen tahakkuk yok{scope}; sıradaki {len(soon)} kayıt")
+    lines = [f"{head}, tahakkuk eden toplam {format_tr_amount(total)} TL:"]
+    for d in shown[:12]:
+        amount = "okunamadı" if d.payable is None else f"{format_tr_amount(d.payable)} TL"
+        when = (f"{abs(d.days_left)} gün geçti" if d.days_left < 0
+                else f"{d.days_left} gün kaldı")
+        lines.append(f"  {d.client_label}  {(d.kind or '-').upper()} {d.period}  "
+                     f"{amount}  vade {d.due_date} ({when})")
+    if len(shown) > 12:
+        lines.append(f"  ... ve {len(shown) - 12} kayıt daha")
+    # Said outright, because the figure above is the single most misreadable number in
+    # the app: it looks exactly like a debt total and is not one.
+    lines.append("Not: tahakkuk eden tutarlardır, ödenip ödenmediği bu kayıtlarda yok.")
+    return Answer("\n".join(lines),
+                  [{"client": d.client_label, "kind": d.kind, "period": d.period,
+                    "payable": d.payable, "due_date": d.due_date,
+                    "days_left": d.days_left, "bucket": d.bucket} for d in shown],
+                  parsed.intent)
+
+
+def _gaps_answer(conn: sqlite3.Connection, parsed: Question,
+                 client_id: int | str | None,
+                 client_label: str | None) -> Answer:
+    """Periods with invoices but no tahakkuk, plus unreadable and vanished files.
+
+    "Tahakkuk fişi olmayan dönemler hangileri" used to route to DECLARATION and answer
+    with the list of declarations that *do* exist -- the exact inverse of the question,
+    presented as if it were the answer.
+    """
+    from . import compliance
+
+    rows = compliance.gaps(conn, client_id=client_id)
+    scope = _scope(parsed, client_label)
+    if not rows:
+        return Answer(f"Eksik belge görünmüyor{scope}.", [], parsed.intent)
+
+    lines = [f"{len(rows)} eksik/sorunlu kayıt{scope}:"]
+    for g in rows[:12]:
+        when = f"{g.doc_year}-{g.doc_month:02d}" if g.doc_month else str(g.doc_year or "-")
+        lines.append(f"  {g.client_label}  {when}  {g.detail}")
+    if len(rows) > 12:
+        lines.append(f"  ... ve {len(rows) - 12} kayıt daha")
+    return Answer("\n".join(lines),
+                  [{"client": g.client_label, "reason": g.reason, "detail": g.detail,
+                    "year": g.doc_year, "month": g.doc_month} for g in rows],
+                  parsed.intent)
+
+
+def _by_client_answer(conn: sqlite3.Connection, parsed: Question,
+                      client_id: int | str | None,
+                      client_label: str | None) -> Answer:
+    """Totals per client -- the practice-level view BY_VENDOR does not give.
+
+    BY_VENDOR groups by who was paid. An accountant asking "en çok hangi müşteriye
+    fatura kesildi" wants their own client list, which had no intent at all.
+    """
+    frame = _filtered(conn, parsed, client_id)
+    scope = _scope(parsed, client_label)
+    if frame.empty:
+        return Answer(f"Kayıt bulunamadı{scope}.", [], parsed.intent)
+
+    # load_frame carries client_id, not the name -- resolved here so the answer names
+    # clients the way the user does.
+    labels = {c.id: c.label for c in known_clients(conn)}
+    grouped = (frame.assign(_c=frame["client_id"].map(labels).fillna("Atanmamış"))
+               .groupby("_c")["total_amount"].agg(["sum", "count"])
+               .sort_values("sum", ascending=False))
+    rows = [{"client": name, "total": round(float(r["sum"]), 2),
+             "count": int(r["count"])} for name, r in grouped.iterrows()]
+    lines = [f"Müşteri bazında dağılım{scope}:"]
+    lines += [f"  {r['client'][:40]:<42} {format_tr_amount(r['total']):>13} TL  "
+              f"({r['count']} fatura)" for r in rows[:15]]
+    return Answer("\n".join(lines), rows, parsed.intent)
+
+
 def _declarations_answer(conn: sqlite3.Connection, parsed: Question,
                          client_id: int | str | None,
                          client_label: str | None) -> Answer:
@@ -547,6 +674,15 @@ def _declarations_answer(conn: sqlite3.Connection, parsed: Question,
     rows = conn.execute(
         f"SELECT kind, period, payable, due_date, receipt_no, needs_review "
         f"FROM declarations WHERE {where} ORDER BY period DESC, id", params).fetchall()
+
+    # The period filter has to be applied here too. It was not, so "bu ay hangi
+    # beyannameler var" printed "(2026-08-01 - 2026-08-31)" above a list of April and
+    # February receipts -- a scope label describing a filter that never ran, which is
+    # the same class of wrong as a figure carrying the wrong client's name.
+    if parsed.since or parsed.until:
+        low = (parsed.since or "0000-00")[:7]
+        high = (parsed.until or "9999-99")[:7]
+        rows = [r for r in rows if r["period"] and low <= r["period"] <= high]
 
     scope = _scope(parsed, client_label)
     if not rows:
@@ -657,6 +793,12 @@ def answer(conn: sqlite3.Connection, parsed: Question,
     # These read tables the invoice frame does not cover, and must answer even when the
     # client has no invoices at all -- "tahakkuk fişi ne kadar" is a fair question for a
     # client whose only documents are receipts.
+    if parsed.intent is Intent.DEADLINE:
+        return _deadlines_answer(conn, parsed, client_id, client_label)
+    if parsed.intent is Intent.GAP:
+        return _gaps_answer(conn, parsed, client_id, client_label)
+    if parsed.intent is Intent.BY_CLIENT:
+        return _by_client_answer(conn, parsed, client_id, client_label)
     if parsed.intent is Intent.DECLARATION:
         return _declarations_answer(conn, parsed, client_id, client_label)
     if parsed.intent is Intent.DOCUMENT:

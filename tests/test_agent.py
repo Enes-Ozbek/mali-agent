@@ -206,7 +206,10 @@ def test_meta_question_answers_without_the_model(conn, spy):
 
 def test_meta_answer_describes_the_real_corpus(conn):
     text = agent.answer(conn, "neler yapabilirsin").text
-    assert "6 faturanız" in text                    # the fixture's real count
+    # "Büro genelinde", not "faturanız": these are the accountant's clients' books,
+    # not their own. The greeting used to say "your invoices" to someone they do not
+    # belong to.
+    assert "Büro genelinde 6 fatura" in text        # the fixture's real count
     assert "2025-06-20 - 2026-05-13" in text        # its real date range
     assert "telekom" in text and "ev" in text       # its real categories
 
@@ -294,3 +297,65 @@ def test_plain_text_keeps_a_single_line_reply_even_if_it_echoes():
     """Dropping it would leave nothing at all."""
     assert agent.plain_text("Kaç faturası var?", question="Kaç faturası var?") \
         == "Kaç faturası var?"
+
+
+def test_the_help_text_is_written_for_an_accountant_not_a_consumer(conn):
+    """It used to offer "En son ne zaman alışveriş yaptım?" and "Kaç faturam var?" --
+    first-person consumer questions left over from when this tracked one person's own
+    spending. An accountant does not go shopping in a client's ledger, and a suggestion
+    list that talks that way tells the user the tool was built for someone else.
+    """
+    text = agent.answer(conn, "neler yapabilirsin").text
+    for consumer_phrase in ("alışveriş", "faturam", "harcadım", "ödedim",
+                            "harcamam", "ödemelerim", "faturanız"):
+        assert consumer_phrase not in text, f"consumer wording survives: {consumer_phrase}"
+
+
+def test_the_help_text_does_not_point_at_a_ui_that_no_longer_exists(conn):
+    """It told users to drop PDFs on a panel removed when the archive tree landed."""
+    assert "PDF bırak" not in agent.answer(conn, "neler yapabilirsin").text
+
+
+def test_every_suggested_question_routes_where_it_claims(conn):
+    """The help text is generated from the router's own intent table, so a suggestion
+    that no longer routes is the tool lying about itself."""
+    from malimusavir import router
+
+    for intent, label in agent.CAPABILITY_LABELS.items():
+        if not label:
+            continue
+        parsed = router.classify(label, vendors=router.known_vendors(conn),
+                                 categories=router.known_categories(conn),
+                                 clients=router.known_clients(conn))
+        assert parsed.intent is intent, (
+            f"{label!r} is offered as {intent.value} but routes to {parsed.intent.value}")
+
+
+def test_the_dashboard_chips_ask_questions_the_router_can_answer(conn):
+    """The chat suggestion chips live in index.html, so no Python test saw them and
+    they rotted independently of CAPABILITY_LABELS: the practice-wide view offered
+    "Toplam ne kadar harcandı?", which across unrelated clients sums to a figure with
+    no meaning. Any chip that falls through to semantic search is a button that
+    visibly does nothing useful."""
+    import re
+    from pathlib import Path
+
+    from malimusavir import router
+
+    html = Path(__file__).resolve().parents[1] / "web" / "index.html"
+    asks = re.findall(r"askNow\(['\"`]([^'\"`]+)['\"`]\)",
+                      html.read_text(encoding="utf-8"))
+    assert asks, "no chips found -- the extraction regex has drifted"
+
+    vendors = router.known_vendors(conn)
+    categories = router.known_categories(conn)
+    clients = router.known_clients(conn)
+    for ask in asks:
+        # Template chips carry ${monthName}/${st.year}; substitute a real period so the
+        # question is the shape a user actually sends.
+        question = re.sub(r"\$\{st\.year\}", "2026", ask)
+        question = re.sub(r"\$\{monthName\}", "Ocak", question)
+        parsed = router.classify(question, vendors=vendors, categories=categories,
+                                 clients=clients)
+        assert parsed.intent is not router.Intent.SEMANTIC, (
+            f"chip {ask!r} falls through to semantic search")

@@ -4,6 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mali Müşavir</title>
+<!-- React is served from disk, not unpkg.com. support.js falls back to a CDN, which
+     meant every launch made two requests off the machine -- and with no network the
+     dashboard rendered a completely blank page, which is the state an accountant's
+     firewalled office PC is in. These two files are byte-identical to the CDN copies:
+     their SHA-384 digests match the SRI constants in support.js. Loading them first
+     matters, because loadReactUmd() skips the CDN entirely once window.React exists. -->
+<script src="vendor/react-18.3.1.production.min.js"></script>
+<script src="vendor/react-dom-18.3.1.production.min.js"></script>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -497,8 +505,14 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 <button class="closex" onClick="{{ closePreview }}" title="Kapat (Esc)">✕</button>
 </div>
 
-<sc-if value="{{ preview.exists }}" hint-placeholder-val="{{ true }}">
-<iframe src="{{ preview.url }}" style="flex:1;width:100%;border:0;background:var(--color-neutral-200)" title="{{ preview.title }}"></iframe>
+<sc-if value="{{ preview.exists }}" hint-placeholder-val="{{ false }}">
+<!-- sc-camel-src, not src: this template is live markup in <body>, so the browser
+     parses the iframe and loads its src before support.js runs. With a literal
+     src="{{ preview.url }}" every page load fetched /%7B%7B%20preview.url%20%7D%7D and
+     took a 404. The runtime maps sc-camel-<name> back to the prop of that name, so the
+     binding still lands on src while the parser sees no URL to fetch. Nothing looked
+     broken, which is why it survived -- it only showed up watching the network. -->
+<iframe sc-camel-src="{{ preview.url }}" style="flex:1;width:100%;border:0;background:var(--color-neutral-200)" title="{{ preview.title }}"></iframe>
 </sc-if>
 <sc-if value="{{ preview.missing }}" hint-placeholder-val="{{ false }}">
 <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:24px;text-align:center">
@@ -1410,11 +1424,16 @@ class Component extends DCLogic {
       // Chips follow the tree selection, so they always ask about what is on screen.
       // The question text carries the period explicitly ("Ocak 2026 ...") rather than
       // relying on the panel scope, because the router reads the question, not the UI.
+      // On the practice-wide view the chips ask practice-wide questions. They used to
+      // offer "Toplam ne kadar harcandı?" -- across every client that is the summed
+      // spending of unrelated businesses, a figure with no meaning to anyone. What a
+      // müşavir opens the day wanting is on the board right above: who is late, who is
+      // missing paperwork, and how the work is distributed.
       prompts: st.view === 'list'
         ? [
-            { label: 'Toplam', ask: askNow('Toplam ne kadar harcandı?') },
-            { label: 'Kategoriler', ask: askNow('Kategorilere göre dağılım nedir?') },
-            { label: 'En pahalı fatura', ask: askNow('En pahalı fatura hangisi?') }
+            { label: 'Geciken vadeler', ask: askNow('Hangi müşterinin vadesi geçti?') },
+            { label: 'Eksik belgeler', ask: askNow('Hangi müşteride eksik belge var?') },
+            { label: 'Müşteri dağılımı', ask: askNow('Müşteri bazında dağılım nedir?') }
           ]
         : monthName
         ? [

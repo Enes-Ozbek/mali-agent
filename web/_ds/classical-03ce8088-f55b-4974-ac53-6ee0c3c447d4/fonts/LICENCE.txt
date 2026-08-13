@@ -1,0 +1,20 @@
+Vendored web fonts
+==================
+
+These .woff2 files are served from disk so the dashboard makes no network request.
+Only the `latin` and `latin-ext` subsets are included; `latin-ext` is the one that
+carries Turkish ğ, ş, ı and İ.
+
+Cormorant Garamond
+  Copyright 2015 The Cormorant Project Authors
+  (https://github.com/CatharsisFonts/Cormorant), with Reserved Font Name "Cormorant".
+  https://fonts.google.com/specimen/Cormorant+Garamond
+
+Lora
+  Copyright 2011 The Lora Project Authors
+  (https://github.com/cyrealtype/Lora-Cyrillic), with Reserved Font Name "Lora".
+  https://fonts.google.com/specimen/Lora
+
+Both are licensed under the SIL Open Font License, Version 1.1, reproduced in full in
+OFL.txt in this directory. The licence permits bundling and redistribution with the
+software; it does not permit selling the fonts on their own.
