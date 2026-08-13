@@ -111,7 +111,9 @@ Kullanıcının ŞU ANKİ sorusu: {question}
 
 Yukarıdaki veriyi kullanarak soruyu doğal bir Türkçe cümleyle yanıtla.
 Doğrudan cevabı yaz: soruyu tekrar etme, gerekçeni açıklama, önceki yanıtını
-kopyalama. Sohbet geçmişi yalnızca bağlam içindir."""
+kopyalama. Sohbet geçmişi yalnızca bağlam içindir.
+Soru "hangisi", "hangi", "kim" ya da "ne zaman" diye soruyorsa verideki satıcı adını
+ve tarihi mutlaka yaz -- tek başına tutar bu soruların cevabı değildir."""
 
 #: Used when the computed answer is a table or has several clauses that each carry a
 #: figure. Measured against qwen3-4b: with the plain template above, the full monthly
