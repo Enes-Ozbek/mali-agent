@@ -1,4 +1,4 @@
-# Claude Design prompt — Mali Müşavir dashboard
+# Claude Design prompt — Mali Agent dashboard
 
 Paste the sections below into claude.ai/design. The data schema matches the real
 `invoices` table (`schema.sql`) and the real aggregate shapes (`stats.py`, `router.py`)
@@ -8,7 +8,7 @@ so a future API layer can be wired in without changing the frontend's data model
 
 ## Prompt
 
-Build a local-first dashboard for "Mali Müşavir" — a personal Turkish invoice
+Build a local-first dashboard for "Mali Agent" — a Turkish accounting-practice
 assistant. It ingests e-Arşiv PDF invoices, extracts structured data, and answers
 questions about spend. Turkish locale throughout: dates as YYYY-MM-DD or DD.MM.YYYY,
 amounts as `1.234,56 TL` (dot for thousands, comma for decimal). No login/auth — single

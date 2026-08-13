@@ -1,4 +1,4 @@
-"""Mali Musavir -- local Turkish e-Arsiv invoice assistant.
+"""Mali Agent -- local Turkish e-Arsiv accounting workspace.
 
     python main.py --ingest "C:\\faturalar"
     python main.py --ask "Turkcell'e toplam ne kadar odedim"
@@ -297,7 +297,7 @@ def cmd_serve(args) -> int:
         print(f"  {endpoint}" if endpoint else
               "  başlatılamadı — panel çalışır, yalnızca AI modu devre dışı", flush=True)
 
-    print(f"Mali Müşavir -- http://127.0.0.1:{args.port}  (Ctrl+C to stop)")
+    print(f"Mali Agent -- http://127.0.0.1:{args.port}  (Ctrl+C to stop)")
     if args.open_browser:
         # After the message, so the URL is on screen even if the browser misbehaves.
         threading.Timer(1.5, webbrowser.open,
@@ -308,7 +308,7 @@ def cmd_serve(args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="mali-musavir",
+        prog="mali-agent",
         description="Local Turkish e-Arsiv invoice analysis. Nothing leaves this machine.",
     )
     action = parser.add_mutually_exclusive_group(required=True)

@@ -1,8 +1,8 @@
-# PyInstaller build for Mali Müşavir.
+# PyInstaller build for Mali Agent.
 #
-#     .venv\Scripts\pyinstaller.exe MaliMusavir.spec
+#     .venv\Scripts\pyinstaller.exe MaliAgent.spec
 #
-# Produces dist/MaliMusavir/MaliMusavir.exe -- a folder build, not a single file, and
+# Produces dist/MaliAgent/MaliAgent.exe -- a folder build, not a single file, and
 # deliberately so. A one-file exe unpacks ~400 MB of pandas, numpy and scikit-learn to a
 # temp directory on *every* launch, which costs 10-20 seconds each time and trips
 # antivirus heuristics. The folder starts in about a second and can still be zipped or
@@ -60,7 +60,7 @@ exe = EXE(
     analysis.scripts,
     [],
     exclude_binaries=True,
-    name="MaliMusavir",
+    name="MaliAgent",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -78,5 +78,5 @@ COLLECT(
     analysis.datas,
     strip=False,
     upx=False,
-    name="MaliMusavir",
+    name="MaliAgent",
 )

@@ -1,5 +1,5 @@
 @echo off
-rem Double-click launcher for Mali Musavir.
+rem Double-click launcher for Mali Agent.
 rem
 rem Starts the local model server, starts the dashboard, opens the browser. Nothing
 rem here reaches the network: Foundry Local and the web server both bind 127.0.0.1.
@@ -28,7 +28,7 @@ rem database is in use should never be a surprise on a double-click.
 set "DB=%~dp0faturalar.db"
 if not "%~1"=="" set "DB=%~1"
 
-echo Mali Musavir baslatiliyor...
+echo Mali Agent baslatiliyor...
 echo   veritabani: %DB%
 echo.
 

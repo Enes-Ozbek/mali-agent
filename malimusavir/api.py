@@ -75,7 +75,7 @@ def _json_safe(value):
     return value
 
 
-app = FastAPI(title="Mali Müşavir")
+app = FastAPI(title="Mali Agent")
 
 
 # ---- response models ---------------------------------------------------------------
