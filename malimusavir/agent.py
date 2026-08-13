@@ -127,34 +127,37 @@ CLIENT_QUESTIONS: tuple[router.Intent, ...] = (
     router.Intent.DOCUMENT,
 )
 
-_SYSTEM_BASE = """Sen bir Türk mali müşavir bürosunun asistanısın. Kullanıcı mali
-müşavirdir; incelediğin belgeler onun MÜŞTERİLERİNE aittir, kendisine değil.
+#: Every rule here was earned by a real wrong answer, so none were dropped for being
+#: verbose -- but several were doing a job something else now does better, and prompt
+#: length is the whole latency bill. Measured: "Kaç belge kayıtlı?" spent 41.7s
+#: producing *thirteen* tokens. Generation is free; processing 652 prompt tokens on CPU
+#: is not, and this block was 394 of them, resent on every call.
+#:
+#: Retired: the ban on repeating "HESAPLANAN VERİ" headers and most of the markdown
+#: rule, because plain_text() now strips both deterministically rather than asking the
+#: model to refrain. Asking costs tokens on every request; stripping costs none.
+#: Retired with them: the instructions about reproducing rows, which no longer reach
+#: the model at all now that tables are returned verbatim.
+_SYSTEM_BASE = """Sen bir Türk mali müşavir bürosunun asistanısın. Belgeler kullanıcının
+MÜŞTERİLERİNE aittir, kendisine değil.
 
 Kurallar:
-- Sana "HESAPLANAN VERİ" olarak verilen sayılar veritabanından gelir ve DOĞRUDUR.
-  Bu sayıları aynen kullan; asla değiştirme, yuvarlama veya kendi hesabını yapma.
-- Sana verilmeyen bir sayıyı asla uydurma. Veri yoksa "bu bilgi faturalarda yok" de.
-- Kısa ve net konuş. Türkçe yanıt ver. Para birimini "1.234,56 TL" biçiminde yaz.
-- DÜZ METİN yaz. Markdown kullanma: yıldız (*), kalın yazı, başlık (#) YASAK.
-  Arayüz markdown'ı işlemez; yazdığın yıldızlar kullanıcıya aynen görünür.
-- Sana verilen "HESAPLANAN VERİ" gibi başlıkları yanıtında tekrarlama; bunlar
-  senin için, kullanıcı için değil.
-- HESAPLANAN VERİ'deki parantez içi KAPSAMI aynen koru. Veri "tüm müşteriler"
-  kapsamındaysa rakamı tek bir müşteriye ATFETME; "tüm müşteriler toplamında" de.
-  Veri bir müşteri adı taşıyorsa yanıtta o adı kullan, başka bir ad uydurma.
-- Bir müşteri adı verildiyse üçüncü şahıs kullan ("Canan Aydın ... ödemiş").
-  Asla "ödedim", "harcadım" veya "faturanız" deme -- belgeler kullanıcının değil."""
+- "HESAPLANAN VERİ" sayıları veritabanından gelir ve DOĞRUDUR. Aynen kullan; asla
+  değiştirme, yuvarlama veya kendi hesabını yapma.
+- Verilmeyen bir sayıyı asla uydurma. Veri yoksa "bu bilgi faturalarda yok" de.
+- Kısa, düz Türkçe yaz. Para birimi "1.234,56 TL". Markdown kullanma.
+- Verideki parantez içi kapsamı koru: "tüm müşteriler" kapsamındaki bir rakamı tek bir
+  müşteriye atfetme. Bir müşteri adı geçiyorsa o adı kullan, başka ad uydurma.
+- Üçüncü şahıs yaz ("Canan Aydın ödemiş"). Asla "ödedim" veya "faturanız" deme."""
 
-_GROUNDED = """HESAPLANAN VERİ (veritabanından, doğrudur):
+_GROUNDED = """HESAPLANAN VERİ (doğrudur):
 {facts}
 
-Kullanıcının ŞU ANKİ sorusu: {question}
+Soru: {question}
 
-Yukarıdaki veriyi kullanarak soruyu doğal bir Türkçe cümleyle yanıtla.
-Doğrudan cevabı yaz: soruyu tekrar etme, gerekçeni açıklama, önceki yanıtını
-kopyalama. Sohbet geçmişi yalnızca bağlam içindir.
-Soru "hangisi", "hangi", "kim" ya da "ne zaman" diye soruyorsa verideki satıcı adını
-ve tarihi mutlaka yaz -- tek başına tutar bu soruların cevabı değildir."""
+Bu veriyle soruyu tek bir doğal Türkçe cümleyle yanıtla. Soruyu tekrar etme.
+"Hangisi/hangi/kim/ne zaman" sorularında verideki satıcı adını ve tarihi de yaz --
+tek başına tutar bu soruların cevabı değildir."""
 
 #: One line, several figures -- the KDV position. Keeps the completeness rule that
 #: stopped qwen3-4b dropping the devreden figure, and drops the layout rule that made
