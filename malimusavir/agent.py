@@ -177,6 +177,14 @@ _STAR_BULLET = re.compile(r"^(\s*)\*\s+", re.MULTILINE)
 #: model also produces trailing fragments like "Yukarıdaki HESAPLANAN VERİ".
 _SCAFFOLD = re.compile(
     r"^.*HESAPLANAN VER[İI].*$", re.MULTILINE | re.IGNORECASE)
+#: The parenthetical from that same header, which arrives *without* the label attached:
+#: the model swaps in a noun of its own and emits "Aylık dağılım (veritabanından,
+#: doğrudur)):". Stripping only lines containing "HESAPLANAN VERİ" never caught it.
+_SCAFFOLD_ASIDE = re.compile(r"\s*\(\s*veritabanından,?\s*doğrudur\s*\)", re.IGNORECASE)
+#: Labels the model invents to structure a reply it was asked to give as plain prose.
+_ANSWER_LABEL = re.compile(r"^\s*(CEVAP|YANIT|SORU)\s*:\s*", re.MULTILINE | re.IGNORECASE)
+#: A bracket left doubled by the substitutions above, or by the model copying one.
+_DOUBLED_CLOSE = re.compile(r"\)\s*\)+")
 _BLANK_RUN = re.compile(r"\n{3,}")
 
 
@@ -199,6 +207,12 @@ def plain_text(text: str, question: str | None = None) -> str:
     cleaned = _BOLD.sub(r"\1", text)
     cleaned = _HEADING.sub("", cleaned)
     cleaned = _SCAFFOLD.sub("", cleaned)
+    # Collapse before stripping the aside, not after: "(veritabanından, doğrudur))"
+    # loses one bracket to the aside, and a lone ")" left mid-sentence reads as damage
+    # rather than the leak it came from.
+    cleaned = _DOUBLED_CLOSE.sub(")", cleaned)
+    cleaned = _SCAFFOLD_ASIDE.sub("", cleaned)
+    cleaned = _ANSWER_LABEL.sub("", cleaned)
     cleaned = _RULE.sub("", cleaned)
     cleaned = _STAR_BULLET.sub(r"\1- ", cleaned)
     cleaned = cleaned.replace("**", "")
@@ -211,6 +225,14 @@ def plain_text(text: str, question: str | None = None) -> str:
         head, _, rest = cleaned.partition("\n")
         if rest.strip() and _same_text(head, question):
             cleaned = rest.strip()
+        # The echo is not always on a line of its own: "Toplam KDV ne kadar? Toplam
+        # KDV/vergi (...): 101.692,00 TL" repeats the question inline, and splitting on
+        # newlines never saw it. Only an exact prefix is removed, so an answer that
+        # merely opens with similar words is left alone.
+        elif fold_tr(cleaned).startswith(fold_tr(question.strip())):
+            trimmed = cleaned[len(question.strip()):].lstrip(" \t?!.:-—")
+            if trimmed:
+                cleaned = trimmed
     return cleaned
 
 
