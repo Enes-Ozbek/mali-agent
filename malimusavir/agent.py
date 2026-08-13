@@ -138,6 +138,26 @@ Bu veriyi Türkçe olarak aktar. Kurallar:
 - Kısa bir giriş cümlesi yaz, sonra her satırı "- " ile başlayan ayrı bir satıra koy.
 - DÜZ METİN: yıldız (*), kalın yazı veya başlık kullanma. Başlıkları tekrarlama."""
 
+#: One line, several figures -- the KDV position. Keeps the completeness rule that
+#: stopped qwen3-4b dropping the devreden figure, and drops the layout rule that made
+#: it bullet a sentence apart. Copying punctuation exactly is spelled out because the
+#: model reliably turned "5 müşteri):" into "5 müşteri)):", and the ban on capitals
+#: because it rendered the closing caveat as a shouted heading.
+_GROUNDED_FIGURES = """HESAPLANAN VERİ (veritabanından, doğrudur):
+{facts}
+
+Kullanıcının ŞU ANKİ sorusu: {question}
+
+Bu veriyi tek bir kısa paragraf olarak, akıcı Türkçe cümlelerle aktar. Kurallar:
+- Verideki HER rakamı yaz. Hiçbirini atlama.
+- Rakam içermeyen cümleleri de aktar. Özellikle uyarı cümlelerini ("uyuşmuyor",
+  "kontrol edin", "okunamadı" gibi) ASLA atlama -- rakamlar kadar önemlidirler.
+- Rakamları ve noktalama işaretlerini aynen kopyala; yeniden hesaplama veya yuvarlama
+  yapma, parantezleri çoğaltma.
+- Madde işareti, tire ile başlayan satır, liste ya da başlık KULLANMA. Düz cümle yaz.
+- BÜYÜK HARFLE yazma; normal cümle düzeni kullan.
+- Soruyu tekrar etme, yönergeleri tekrar etme, "CEVAP:" gibi bir etiket yazma."""
+
 _OFF_TOPIC = """Kullanıcının sorusu faturalarıyla ilgili değil: "{question}"
 
 Bunu sıradan bir sohbet gibi, kendi genel bilgine dayanarak kısa ve samimi şekilde
@@ -290,15 +310,43 @@ def capabilities(conn: sqlite3.Connection, client_id: int | str | None = None) -
 #: Intents whose computed answer is a table rather than a single figure. Not a bypass:
 #: these still go through the model, but with an instruction that every row has to
 #: survive, because measurement showed it dropping them.
+#:
+#: VAT_POSITION used to be in here and should never have been: its answer is one prose
+#: sentence carrying several figures, not rows. Given the table prompt -- which ends
+#: "put each row on its own line starting with -" -- the model had no rows to lay out
+#: and improvised, every single run: it split the sentence into bullets, duplicated a
+#: bracket into "5 müşteri))", SHOUTED the closing caveat, and sometimes echoed the
+#: prompt scaffold ("Kullanıcının ŞU ANKİ sorusu: ... CEVAP:") into the reply. The
+#: figures stayed correct throughout, which is why no numeric test caught it.
 TABULAR_INTENTS = frozenset({
     router.Intent.BY_CATEGORY, router.Intent.BY_VENDOR, router.Intent.BY_MONTH,
     router.Intent.RECURRING, router.Intent.LIST, router.Intent.DECLARATION,
-    router.Intent.DOCUMENT, router.Intent.VAT_POSITION,
+    router.Intent.DOCUMENT, router.Intent.DEADLINE, router.Intent.GAP,
+    router.Intent.BY_CLIENT,
 })
+
+#: A Turkish amount: "1.234,56" or "60.508,00".
+_AMOUNT = re.compile(r"\d[\d.]*,\d{2}")
 
 
 def _is_tabular(computed: router.Answer) -> bool:
+    """Does the computed answer actually have rows to lay out?
+
+    Decided by the shape of the text, not by intent. An intent list is a claim about
+    what an answer looks like, and it went stale the moment VAT_POSITION's wording
+    changed from a list to a sentence -- nothing connected the two.
+    """
     return computed.intent in TABULAR_INTENTS or "\n" in computed.text
+
+
+def _is_multi_figure(computed: router.Answer) -> bool:
+    """One line, several numbers -- the KDV position, and nothing else so far.
+
+    Needs the table prompt's completeness rule, because with the plain template
+    qwen3-4b reported the payable figure and dropped the carried-forward one. Must not
+    get its layout rule, which is what produced the bulleted mess.
+    """
+    return not _is_tabular(computed) and len(_AMOUNT.findall(computed.text)) >= 2
 
 
 def _history(messages: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -407,7 +455,12 @@ def answer(
         if computed.verbatim or not use_llm:
             return AgentReply(computed.text, "router", computed.intent.value,
                               facts=computed.text)
-        template = _GROUNDED_TABLE if _is_tabular(computed) else _GROUNDED
+        if _is_tabular(computed):
+            template = _GROUNDED_TABLE
+        elif _is_multi_figure(computed):
+            template = _GROUNDED_FIGURES
+        else:
+            template = _GROUNDED
         try:
             phrased = foundry.chat_turns(
                 turns + [{

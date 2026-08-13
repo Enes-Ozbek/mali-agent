@@ -445,3 +445,52 @@ def test_income_and_expense_are_net_of_vat(conn):
     text = router.route(conn, "Toplam gider ne kadar?").text
     assert f"{net:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") in text
     assert "KDV hariç" in text
+
+
+# --- which template a computed answer gets ---------------------------------------
+
+
+def _prompt_of(spy):
+    return spy[0]["messages"][-1]["content"]
+
+
+def test_a_prose_answer_is_never_given_the_table_layout_rule(conn, spy):
+    """The KDV position is one sentence carrying four figures, not a table.
+
+    It used to sit in TABULAR_INTENTS, so it got the table prompt -- which ends "put
+    each row on its own line starting with -". With no rows to lay out qwen3-4b
+    improvised, on every run: it bulleted the sentence apart, wrote "5 müşteri))",
+    SHOUTED the closing caveat, and sometimes pasted the prompt scaffold into the
+    reply. The figures were right the whole time, which is why no numeric check saw it.
+    """
+    agent.answer(conn, "Ödenecek KDV ne kadar?")
+    prompt = _prompt_of(spy)
+    assert 'her satırı "- " ile başlayan' not in prompt, (
+        "a single-sentence answer was told to lay itself out as rows")
+    # It still has to be told to keep every figure: with the plain template the model
+    # reported the payable and dropped the carried-forward one.
+    assert "HER rakamı" in prompt
+
+
+def test_a_table_answer_still_gets_the_completeness_and_layout_rules(conn, spy):
+    agent.answer(conn, "kategorilere göre dağılım nedir")
+    prompt = _prompt_of(spy)
+    assert "HER satırı" in prompt
+    assert 'her satırı "- " ile başlayan' in prompt
+
+
+def test_a_single_figure_answer_gets_the_plain_template(conn, spy):
+    """One number needs no completeness scaffolding, and adding it invites the model to
+    pad the answer out with structure that is not there."""
+    agent.answer(conn, "kaç fatura var")
+    prompt = _prompt_of(spy)
+    assert "Kurallar:" not in prompt
+
+
+def test_warnings_without_figures_are_preserved(conn, spy):
+    """"İki rakam uyuşmuyor, fişleri kontrol edin" carries no number, so a rule about
+    keeping every *figure* does not protect it -- and the model dropped it. It is the
+    entire point of cross-checking the computed VAT against the tahakkuk."""
+    agent.answer(conn, "Ödenecek KDV ne kadar?")
+    prompt = _prompt_of(spy)
+    assert "uyuşmuyor" in prompt and "ASLA atlama" in prompt
