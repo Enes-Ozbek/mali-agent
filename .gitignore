@@ -21,6 +21,14 @@ dist/
 # Office lock files -- created beside any .doc/.xls left open in Word or Excel.
 ~$*
 
+# Personal documents. Nothing stopped a staj raporu being committed to this repo
+# once, and deleting it later did not remove it from history -- it took a rewrite.
+# Add an exception deliberately if a Word document ever belongs here.
+*.docx
+*.doc
+*.xlsx
+*.xls
+
 # Screenshots from browser test runs.
 live_shot.png
 preview_shot.png
