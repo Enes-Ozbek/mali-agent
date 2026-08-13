@@ -359,3 +359,89 @@ def test_the_dashboard_chips_ask_questions_the_router_can_answer(conn):
                                  clients=clients)
         assert parsed.intent is not router.Intent.SEMANTIC, (
             f"chip {ask!r} falls through to semantic search")
+
+
+def test_every_advertised_question_is_answered_from_sql(conn):
+    """Ask the assistant everything it offers, and check each answer against SQL run
+    here rather than through router.py or stats.py -- a check that reuses the code under
+    test can only prove it agrees with itself.
+
+    This is the durable form of a manual pass over the 20 suggestions: all 20 routed and
+    all 20 carried the right figure, but nothing stopped that drifting.
+    """
+    import re
+
+    from malimusavir import router
+
+    def sql(query):
+        return conn.execute(query).fetchone()[0]
+
+    def money_in(text):
+        """Every Turkish-formatted amount in the answer, as floats."""
+        return [float(m.replace(".", "").replace(",", "."))
+                for m in re.findall(r"\d[\d.]*,\d{2}", text)]
+
+    def ints_in(text):
+        return [int(m) for m in re.findall(r"(?<![\d.,])\d+(?![\d.,])", text)]
+
+    buys = "COALESCE(direction,'alis') = 'alis'"
+    sells = "COALESCE(direction,'alis') = 'satis'"
+    # Each entry: intent -> (extractor, expected value from SQL).
+    expected = {
+        router.Intent.COUNT:  (ints_in, sql("SELECT COUNT(*) FROM invoices")),
+        router.Intent.TOTAL:  (money_in, round(sql("SELECT SUM(total_amount) FROM invoices"), 2)),
+        router.Intent.TAX:    (money_in, round(sql("SELECT SUM(tax_amount) FROM invoices"), 2)),
+        router.Intent.EXPENSE: (money_in,
+                                round(sql(f"SELECT SUM(net_amount) FROM invoices WHERE {buys}"), 2)),
+        router.Intent.LARGEST: (money_in,
+                                round(sql("SELECT MAX(total_amount) FROM invoices"), 2)),
+        router.Intent.SMALLEST: (money_in,
+                                 round(sql("SELECT MIN(total_amount) FROM invoices"), 2)),
+    }
+    dates = {
+        router.Intent.LAST:  sql("SELECT MAX(date) FROM invoices"),
+        router.Intent.FIRST: sql("SELECT MIN(date) FROM invoices"),
+    }
+
+    unroutable = []
+    for intent, label in agent.CAPABILITY_LABELS.items():
+        if not label:
+            continue
+        answer = router.route(conn, label)
+        if answer is None or answer.intent is router.Intent.SEMANTIC:
+            unroutable.append(label)
+            continue
+        assert answer.intent is intent, (
+            f"{label!r} is offered as {intent.value} but answered as {answer.intent.value}")
+
+        if intent in expected:
+            extract, want = expected[intent]
+            found = extract(answer.text)
+            assert any(abs(want - f) < 0.01 for f in found), (
+                f"{label!r} should report {want}; answer said {answer.text!r}")
+        if intent in dates:
+            assert dates[intent] in answer.text, (
+                f"{label!r} should report {dates[intent]}; answer said {answer.text!r}")
+
+    assert not unroutable, f"advertised but falls through to semantic search: {unroutable}"
+
+
+def test_income_and_expense_are_net_of_vat(conn):
+    """"Toplam gelir" is hasılat -- the matrah, not the KDV-inclusive total. VAT
+    collected is held for the state, so counting it as revenue overstates the figure an
+    accountant is actually after. The answer says "KDV hariç" because the distinction is
+    invisible otherwise.
+    """
+    from malimusavir import router
+
+    net = round(conn.execute(
+        "SELECT SUM(net_amount) FROM invoices WHERE COALESCE(direction,'alis')='alis'"
+    ).fetchone()[0], 2)
+    gross = round(conn.execute(
+        "SELECT SUM(total_amount) FROM invoices WHERE COALESCE(direction,'alis')='alis'"
+    ).fetchone()[0], 2)
+    assert net != gross, "fixture has no VAT, so this test would prove nothing"
+
+    text = router.route(conn, "Toplam gider ne kadar?").text
+    assert f"{net:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") in text
+    assert "KDV hariç" in text
