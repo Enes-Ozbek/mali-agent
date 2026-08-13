@@ -98,12 +98,18 @@ INTENT_PATTERNS: tuple[tuple[Intent, tuple[str, ...]], ...] = (
                         "musteri basina", "en cok hangi musteri")),
     (Intent.BY_VENDOR, ("hangi firma", "hangi satici", "firma bazinda", "satici bazinda",
                         "firmalara gore", "kime ne kadar", "en cok nereye")),
+    # "Son belge tarihi" is how a müşavir asks whether a client's paperwork is up to
+    # date -- the question behind chasing them for the month's invoices.
     (Intent.LAST, ("en son ne zaman", "son ne zaman", "en son alisveris", "en son fatura",
-                   "son faturam", "en yeni fatura")),
+                   "son faturam", "en yeni fatura", "son belge tarihi", "son belge ne")),
     (Intent.FIRST, ("ilk ne zaman", "en eski", "ilk faturam", "ilk fatura")),
     (Intent.LARGEST, ("en pahali", "en buyuk", "en yuksek", "en fazla tutar")),
     (Intent.SMALLEST, ("en ucuz", "en dusuk", "en kucuk")),
-    (Intent.COUNT, ("kac fatura", "kac tane", "kac adet", "fatura sayisi", "kac faturam")),
+    # "Kac belge" counts what is on file. Safe below DOCUMENT, which claims the phrases
+    # that ask *which* documents exist ("hangi belgeler", "belge var mi") rather than
+    # how many.
+    (Intent.COUNT, ("kac fatura", "kac tane", "kac adet", "fatura sayisi", "kac faturam",
+                    "kac belge", "belge sayisi")),
     (Intent.TAX, ("kdv", "vergi")),
     # "toplami ne kadar" needs its own entry: the possessive suffix means "toplam ne
     # kadar" is not a substring of it, so "Kaya Yapı'nın toplamı ne kadar" fell through

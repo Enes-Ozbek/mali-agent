@@ -60,13 +60,21 @@ RELEVANCE_SPREAD_MIN = 0.04
 #: tracked one person's own spending. An accountant does not go shopping in their
 #: clients' ledgers, and a suggestion list that talks that way tells the user the tool
 #: was built for someone else.
+#: An empty label means "answerable, but not worth suggesting". Three were dropped for
+#: being questions no müşavir asks:
+#:
+#: TAX summed hesaplanan and indirilecek KDV into one figure. Output VAT is money owed
+#: to the state and input VAT is money reclaimable from it; adding them produces a
+#: number with no meaning in any ledger, and offering it invites someone to read it as
+#: the KDV position, which is VAT_POSITION's job.
+#: TOTAL adds sales to purchases the same way. SMALLEST and FIRST answer questions
+#: ("the cheapest invoice", "the oldest one") that carry no consequence for a filing.
+#: All four still answer if asked outright -- they are simply not advertised.
 CAPABILITY_LABELS: dict[router.Intent, str] = {
     router.Intent.VAT_POSITION: "Ödenecek KDV ne kadar?",
-    router.Intent.INCOME: "Toplam gelir ne kadar?",
-    router.Intent.EXPENSE: "Toplam gider ne kadar?",
-    router.Intent.TAX: "Toplam KDV ne kadar?",
-    router.Intent.TOTAL: "Toplam tutar ne kadar?",
-    router.Intent.COUNT: "Kaç fatura var?",
+    router.Intent.INCOME: "Dönem hasılatı ne kadar?",
+    router.Intent.EXPENSE: "Dönem gider toplamı ne kadar?",
+    router.Intent.COUNT: "Kaç belge kayıtlı?",
     router.Intent.DECLARATION: "Tahakkuk fişleri ne durumda?",
     router.Intent.DEADLINE: "Hangi müşterinin vadesi geçti?",
     router.Intent.GAP: "Hangi müşteride eksik belge var?",
@@ -74,17 +82,50 @@ CAPABILITY_LABELS: dict[router.Intent, str] = {
     router.Intent.DOCUMENT: "Vergi levhası hangi klasörde?",
     router.Intent.LIST: "Gider faturalarını listele",
     router.Intent.BY_CATEGORY: "Kategorilere göre dağılım nedir?",
-    router.Intent.BY_VENDOR: "Hangi satıcıya ne kadar ödendi?",
+    router.Intent.BY_VENDOR: "Hangi satıcıdan ne kadar alım yapıldı?",
     router.Intent.BY_MONTH: "Aylık dağılım nedir?",
     router.Intent.RECURRING: "Düzenli ödemeler neler?",
-    router.Intent.LARGEST: "En pahalı fatura hangisi?",
-    router.Intent.SMALLEST: "En ucuz fatura hangisi?",
-    router.Intent.LAST: "En son fatura ne zaman?",
-    router.Intent.FIRST: "İlk fatura ne zaman?",
+    router.Intent.LARGEST: "En yüksek tutarlı fatura hangisi?",
+    router.Intent.LAST: "Son belge tarihi nedir?",
+    router.Intent.TAX: "",
+    router.Intent.TOTAL: "",
+    router.Intent.SMALLEST: "",
+    router.Intent.FIRST: "",
     # SEMANTIC is not asked for by name -- it is the fallback that searches line items,
     # described separately in capabilities() below.
     router.Intent.SEMANTIC: "",
 }
+
+#: The suggestions differ by scope, because the same question is not equally sensible in
+#: both. "Dönem hasılatı ne kadar?" is the figure that goes on a client's beyanname; run
+#: across the whole practice it adds up the turnover of unrelated businesses and means
+#: nothing to anybody. Offering it on the landing page told the user this tool tracks
+#: one set of books -- the reader's own -- which is the opposite of what it is for.
+PRACTICE_QUESTIONS: tuple[router.Intent, ...] = (
+    router.Intent.DEADLINE,
+    router.Intent.GAP,
+    router.Intent.DECLARATION,
+    router.Intent.BY_CLIENT,
+    router.Intent.DOCUMENT,
+)
+
+#: Working a single client's file: the numbers that go on a beyanname, the paperwork
+#: behind them, and the checks worth making before filing.
+CLIENT_QUESTIONS: tuple[router.Intent, ...] = (
+    router.Intent.VAT_POSITION,
+    router.Intent.INCOME,
+    router.Intent.EXPENSE,
+    router.Intent.DECLARATION,
+    router.Intent.BY_VENDOR,
+    router.Intent.LIST,
+    router.Intent.BY_MONTH,
+    router.Intent.BY_CATEGORY,
+    router.Intent.RECURRING,
+    router.Intent.LARGEST,
+    router.Intent.LAST,
+    router.Intent.COUNT,
+    router.Intent.DOCUMENT,
+)
 
 _SYSTEM_BASE = """Sen bir Türk mali müşavir bürosunun asistanısın. Kullanıcı mali
 müşavirdir; incelediğin belgeler onun MÜŞTERİLERİNE aittir, kendisine değil.
@@ -309,10 +350,15 @@ def capabilities(conn: sqlite3.Connection, client_id: int | str | None = None) -
 
     if summary.invoices:
         cats = sorted(c for c in frame["category"].dropna().unique())
+        # A client whose invoices are all sales has no seller on any row, and the
+        # greeting read "3 fatura kayıtlı, 0 farklı satıcıdan" -- a clause that says
+        # nothing and looks like a bug. Named only when there is a number worth naming.
+        vendors = frame["vendor"].dropna().nunique()
+        origin = f"{vendors} farklı satıcıdan, " if vendors else ""
         data = (
             f"Merhaba. {whose} {summary.invoices} fatura kayıtlı "
             f"({summary.first_date} - {summary.last_date} arası), "
-            f"{frame['vendor'].dropna().nunique()} farklı satıcıdan, "
+            f"{origin}"
             f"toplam {format_tr_amount(summary.total)} TL. "
             f"Kategoriler: {', '.join(cats)}."
         )
@@ -321,7 +367,8 @@ def capabilities(conn: sqlite3.Connection, client_id: int | str | None = None) -
                 if scoped else
                 "Merhaba. Henüz kayıtlı fatura yok.")
 
-    examples = "\n".join(f"  • {label}" for label in CAPABILITY_LABELS.values() if label)
+    wanted = CLIENT_QUESTIONS if scoped else PRACTICE_QUESTIONS
+    examples = "\n".join(f"  • {CAPABILITY_LABELS[intent]}" for intent in wanted)
     return (
         f"{data}\n\n"
         f"Şunları sorabilirsiniz:\n{examples}\n"

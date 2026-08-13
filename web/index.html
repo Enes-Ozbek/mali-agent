@@ -1439,10 +1439,10 @@ class Component extends DCLogic {
         ? [
             { label: `${monthName} KDV özeti`,
               ask: askNow(`${monthName} ${st.year} KDV özetini çıkar`) },
-            { label: 'En yüksek gider',
-              ask: askNow(`${monthName} ${st.year} en pahalı fatura hangisi?`) },
-            { label: `${monthName} toplamı`,
-              ask: askNow(`${monthName} ${st.year} toplam ne kadar?`) }
+            { label: 'En yüksek fatura',
+              ask: askNow(`${monthName} ${st.year} en yüksek tutarlı fatura hangisi?`) },
+            { label: `${monthName} hasılatı`,
+              ask: askNow(`${monthName} ${st.year} hasılat ne kadar?`) }
           ]
         : st.year
         ? [
@@ -1452,7 +1452,9 @@ class Component extends DCLogic {
           ]
         : [
             { label: 'KDV durumu', ask: askNow('Ödenecek KDV ne kadar?') },
-            { label: 'Gelir / gider', ask: askNow('Toplam gelir ne kadar?') },
+            // "Toplam gelir ne kadar?" reads as the user's own income. Hasılat is the
+            // word that appears on the beyanname, and it is the client's, not theirs.
+            { label: 'Hasılat', ask: askNow('Dönem hasılatı ne kadar?') },
             { label: 'Tahakkuklar', ask: askNow('Tahakkuk fişleri ne durumda?') }
           ],
       setAi: this.setAi, setFast: this.setFast,

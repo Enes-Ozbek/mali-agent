@@ -574,3 +574,73 @@ def test_a_single_line_answer_is_never_prefixed(conn, monkeypatch):
     monkeypatch.setattr(foundry, "chat_turns", lambda messages, **kw: "Altı fatura var.")
     reply = agent.answer(conn, "kaç fatura var")
     assert reply.text == "Altı fatura var."
+
+
+# --- suggestions are scoped to whose books are open ------------------------------
+
+
+def test_the_practice_view_never_suggests_a_single_ledger_question(conn):
+    """"Dönem hasılatı ne kadar?" is the figure that goes on one client's beyanname.
+    Asked across the whole practice it adds up the turnover of unrelated businesses --
+    a number with no meaning to anyone, and one that tells the reader this tool tracks
+    a single set of books, theirs. Those questions belong on a client's page."""
+    single_ledger = {router.Intent.INCOME, router.Intent.EXPENSE,
+                     router.Intent.VAT_POSITION, router.Intent.BY_VENDOR,
+                     router.Intent.BY_CATEGORY, router.Intent.LARGEST,
+                     router.Intent.RECURRING, router.Intent.LIST}
+    offered = set(agent.PRACTICE_QUESTIONS) & single_ledger
+    assert not offered, f"practice view offers per-client questions: {offered}"
+
+    text = agent.capabilities(conn)
+    assert "hasılat" not in text.lower()
+    assert "Hangi müşterinin vadesi geçti?" in text
+
+
+def test_a_client_page_suggests_the_work_done_on_one_file(conn):
+    scoped = agent.capabilities(conn, client_id=1)
+    assert "Ödenecek KDV ne kadar?" in scoped
+    assert "Dönem hasılatı ne kadar?" in scoped
+    # Practice-wide questions make no sense with one client open.
+    assert "Hangi müşterinin vadesi geçti?" not in scoped
+    assert "Müşteri bazında dağılım nedir?" not in scoped
+
+
+def test_every_offered_question_has_a_label_and_routes(conn):
+    """A blank label would render an empty bullet; a stale one would advertise a
+    capability that answers something else."""
+    vendors = router.known_vendors(conn)
+    categories = router.known_categories(conn)
+    clients = router.known_clients(conn)
+    for group in (agent.PRACTICE_QUESTIONS, agent.CLIENT_QUESTIONS):
+        for intent in group:
+            label = agent.CAPABILITY_LABELS[intent]
+            assert label, f"{intent.value} is offered with no question text"
+            parsed = router.classify(label, vendors=vendors, categories=categories,
+                                     clients=clients)
+            assert parsed.intent is intent, (
+                f"{label!r} is offered as {intent.value}, routes to {parsed.intent.value}")
+
+
+def test_the_unadvertised_intents_still_answer_when_asked(conn):
+    """TAX and TOTAL add figures that do not belong together -- output VAT to input
+    VAT, sales to purchases -- so they are not suggested. They are not removed either:
+    someone who asks outright still gets the computed answer."""
+    for question, intent in (("toplam kdv ne kadar", router.Intent.TAX),
+                             ("toplam tutar ne kadar", router.Intent.TOTAL),
+                             ("en ucuz fatura hangisi", router.Intent.SMALLEST),
+                             ("ilk fatura ne zaman", router.Intent.FIRST)):
+        answer = router.route(conn, question)
+        assert answer is not None and answer.intent is intent
+        assert not agent.CAPABILITY_LABELS[intent], (
+            f"{intent.value} is advertised again; it was dropped deliberately")
+
+
+def test_the_greeting_omits_the_vendor_count_when_there_is_none(conn, monkeypatch):
+    """A client whose invoices are all sales has no seller on any row, and the greeting
+    read "3 fatura kayıtlı, 0 farklı satıcıdan" -- a clause saying nothing, which reads
+    as a bug to the accountant looking at it."""
+    conn.execute("UPDATE invoices SET vendor = NULL")
+    conn.commit()
+    text = agent.capabilities(conn)
+    assert "0 farklı satıcıdan" not in text
+    assert "fatura kayıtlı" in text
