@@ -397,3 +397,13 @@ def test_no_element_carries_an_unrendered_template_as_a_url(server, browser):
     page.wait_for_selector(".crow")
     context.close()
     assert not failed, f"failing requests on load: {failed}"
+
+
+def test_the_header_says_which_build_is_answering(page):
+    """A frozen .exe compiles the code into itself, so a stale one keeps serving old
+    answers and looks identical to a fresh one. A four-day-old build was still offering
+    "Toplam ne kadar harcadım?" and pointing at a panel deleted a fortnight earlier, and
+    the only way to tell was to look up which process held port 8000. Twice."""
+    stamp = page.locator("text=kaynak").first
+    expect(stamp).to_be_visible()
+    assert on_screen(page, "#clientsearch"), "the stamp must not push the search off"

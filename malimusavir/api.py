@@ -572,6 +572,21 @@ def get_vat_summary(since: str | None = None, until: str | None = None,
     )
 
 
+class BuildOut(BaseModel):
+    stamp: str
+
+
+@app.get("/api/build", response_model=BuildOut)
+def get_build():
+    """Which build is answering: a date for a frozen .exe, "kaynak" from source.
+
+    A PyInstaller build carries its own copy of the code, so a stale one keeps serving
+    old answers and looks exactly like a current one. Shown in the header, because
+    twice the only way to tell was to look up which process held the port.
+    """
+    return BuildOut(stamp=paths.build_stamp())
+
+
 @app.get("/api/overview", response_model=OverviewOut)
 def get_overview(client: str | None = None, today: str | None = None,
                  conn: Connection = Depends(get_conn)):

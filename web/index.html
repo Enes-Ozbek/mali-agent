@@ -103,7 +103,12 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 </helmet>
 
 <div style="display:flex;align-items:center;gap:10px;padding:7px 14px;border-bottom:1px solid var(--color-divider);flex:none">
+<!-- The build stamp is here, small but always visible, because a frozen .exe compiles
+     the code into itself: a stale one keeps serving last week's answers and looks
+     identical to a fresh one while doing it. Twice it took a port lookup to notice.
+     "kaynak" means the dev server, so what is on screen is what is on disk. -->
 <span style="font-family:var(--font-heading);font-weight:600;font-size:14.5px">Mali Agent</span>
+<span class="num" style="font-size:9.5px;opacity:.4;white-space:nowrap" title="Çalışan sürüm. 'kaynak' = kaynaktan; tarih = .exe derleme günü.">{{ build }}</span>
 <sc-if value="{{ isClient }}" hint-placeholder-val="{{ false }}">
 <span style="display:flex;align-items:center;gap:9px">
 <span style="width:1px;height:14px;background:var(--color-divider)"></span>
@@ -534,7 +539,7 @@ html,body{margin:0;height:100%;background:var(--color-bg);color:var(--color-text
 class Component extends DCLogic {
   state = {
     view: 'list', clientId: null, client: null, year: null, month: null,
-    loading: true, search: '',
+    loading: true, search: '', build: '',
     clients: [], overview: null, sum: null, cats: [], months: [], recurring: [], ledger: [],
     tahakkuklar: [], docs: [], vat: null, journal: null, plan: null,
     tree: [], openYears: [], openMonths: [], docType: null,
@@ -596,11 +601,14 @@ class Component extends DCLogic {
 
   async loadClients() {
     try {
-      const [clients, overview] = await Promise.all([
+      const [clients, overview, build] = await Promise.all([
         fetch('/api/clients').then(r => r.json()),
-        fetch('/api/overview').then(r => r.json()).catch(() => null)
+        fetch('/api/overview').then(r => r.json()).catch(() => null),
+        // Which build is answering. Never fatal: an older server has no such route,
+        // and a missing stamp must not cost the user their client list.
+        fetch('/api/build').then(r => r.json()).then(b => b.stamp).catch(() => '')
       ]);
-      this.setState({ clients, overview, loading: false });
+      this.setState({ clients, overview, build, loading: false });
     } catch (e) {
       this.setState({ loading: false });
     }
@@ -1306,6 +1314,7 @@ class Component extends DCLogic {
     return {
       isList: st.view === 'list',
       isClient: st.view === 'client',
+      build: st.build,
 
       headline: st.view === 'list'
         ? `${st.clients.length} müşteri · ${totalInvoices} fatura · ${this.fmt(totalClients)}`

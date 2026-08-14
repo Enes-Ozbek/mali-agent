@@ -16,6 +16,7 @@ and why nothing about development changes.
 
 from __future__ import annotations
 
+import datetime
 import sys
 from pathlib import Path
 
@@ -43,6 +44,25 @@ def user_data_root() -> Path:
     if is_frozen():
         return Path(sys.executable).resolve().parent
     return _SOURCE_ROOT
+
+
+def build_stamp() -> str:
+    """When this build was made, or "kaynak" when running from source.
+
+    A frozen build compiles the code into itself, so a stale .exe keeps serving old
+    answers no matter what the repository says -- and looks exactly like a fresh one
+    while doing it. That cost real time twice: a four-day-old build was still offering
+    "Toplam ne kadar harcadım?" and telling users to drop PDFs on a panel deleted a
+    fortnight earlier, and the only way to tell was to look up which process held the
+    port. Displayed, the question answers itself.
+    """
+    if not is_frozen():
+        return "kaynak"
+    try:
+        built = Path(sys.executable).stat().st_mtime
+    except OSError:
+        return "bilinmiyor"
+    return datetime.date.fromtimestamp(built).isoformat()
 
 
 def resource(*parts: str) -> Path:

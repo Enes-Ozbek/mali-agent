@@ -1081,3 +1081,9 @@ def test_a_category_override_changes_the_expense_account(journal_client):
     text = client.get(f"/api/journal.csv?client={cid}").content.decode("utf-8-sig")
     assert "760" in text
     assert ";770;" not in text
+
+
+def test_build_endpoint_reports_the_running_build(client):
+    """Source runs report "kaynak"; a frozen build reports the date it was made."""
+    body = client.get("/api/build").json()
+    assert body["stamp"] == "kaynak"
