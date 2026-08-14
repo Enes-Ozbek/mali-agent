@@ -603,3 +603,27 @@ def test_the_greeting_omits_the_vendor_count_when_there_is_none(conn, monkeypatc
     text = agent.capabilities(conn)
     assert "0 farklı satıcıdan" not in text
     assert "fatura kayıtlı" in text
+
+
+def test_prompt_wording_is_not_echoed_as_headings():
+    """Told "İLK satırdaki toplamı da yaz", qwen3-4b read an instruction about position
+    as a heading: it emitted "İLK SATIR:", invented a matching "SON SATIR:", mirrored
+    the data header back as "VERİ:", and then repeated five rows underneath. The prompt
+    no longer mentions first or last lines; these are stripped in case it improvises."""
+    raw = ("İLK SATIR:\nToplam: 44.161,25 TL\n\nVERİ:\n"
+           "Zirve MUHTASAR 9.800,50 TL\n\nSON SATIR:\nBitti.")
+    out = agent.plain_text(raw, "Hangi müşterinin vadesi geçti?")
+    for label in ("İLK SATIR", "SON SATIR", "VERİ:"):
+        assert label not in out, f"{label} survived: {out!r}"
+    assert "44.161,25" in out and "9.800,50" in out
+
+
+def test_a_repeated_row_is_rejected(conn):
+    """The reported answer listed every filing, then a heading, then five of them over
+    again. Nothing was invented and nothing missing, so every earlier check passed it --
+    while a reader counting overdue filings would have got fourteen instead of nine."""
+    computed = router.route(conn, "kategorilere göre dağılım nedir")
+    rows = computed.text.splitlines()
+    doubled = "\n".join(rows + rows[1:])
+    assert agent.unfaithful(doubled, computed), "a duplicated row was accepted"
+    assert not agent.unfaithful(computed.text, computed), "the true answer was rejected"

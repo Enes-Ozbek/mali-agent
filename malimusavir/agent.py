@@ -166,14 +166,14 @@ _GROUNDED_TABLE = """HESAPLANAN VERİ (doğrudur):
 
 Soru: {question}
 
-Bu veriyi Türkçe aktar. Kurallar:
-- Verideki HER satırı ve HER rakamı yaz. Hiçbirini atlama veya özetleme.
-- İLK satırdaki toplam/özet bilgisini de mutlaka yaz.
-- Rakamları AYNEN kopyala. Yeniden hesaplama, toplama, yuvarlama YAPMA. Veride
-  olmayan bir satır ya da rakam EKLEME.
+Yukarıdaki verinin tamamını Türkçe olarak aktar:
+- Toplamı içeren kısa bir giriş cümlesiyle başla.
+- Sonra her kaydı kendi satırında yaz. Hiçbirini atlama veya özetleme.
+- Rakamları AYNEN kopyala. Hesaplama, yuvarlama ya da veride olmayan bir kayıt
+  ekleme YAPMA.
 - Rakam içermeyen uyarı cümlelerini de aktar.
 - Terimin tanımını yazma; kullanıcı rakamları istiyor.
-- Kısa bir giriş cümlesi yaz, sonra her satırı ayrı satıra koy."""
+- Başlık, etiket veya bölüm adı YAZMA. Soruyu tekrarlama. Hiçbir kaydı iki kez yazma."""
 
 #: One line, several figures -- the KDV position. Keeps the completeness rule that
 #: stopped qwen3-4b dropping the devreden figure, and drops the layout rule that made
@@ -219,7 +219,15 @@ _SCAFFOLD = re.compile(
 #: doğrudur)):". Stripping only lines containing "HESAPLANAN VERİ" never caught it.
 _SCAFFOLD_ASIDE = re.compile(r"\s*\(\s*veritabanından,?\s*doğrudur\s*\)", re.IGNORECASE)
 #: Labels the model invents to structure a reply it was asked to give as plain prose.
-_ANSWER_LABEL = re.compile(r"^\s*(CEVAP|YANIT|SORU)\s*:\s*", re.MULTILINE | re.IGNORECASE)
+#: Labels the model invents to structure a reply, including ones it builds out of the
+#: prompt's own wording. Told "İLK satırdaki toplamı da yaz", qwen3-4b read an
+#: instruction about *position* as a heading and emitted "İLK SATIR:", then invented a
+#: matching "SON SATIR:" and mirrored the data header back as "VERİ:". The prompt no
+#: longer talks about first and last lines; these are stripped in case it improvises
+#: again, because asking has never been enough on its own.
+_ANSWER_LABEL = re.compile(
+    r"^\s*(CEVAP|YANIT|SORU|VERİ|VERI|İLK SATIR|ILK SATIR|SON SATIR|ÖZET|OZET)\s*:\s*",
+    re.MULTILINE | re.IGNORECASE)
 #: A bracket left doubled by the substitutions above, or by the model copying one.
 _DOUBLED_CLOSE = re.compile(r"\)\s*\)+")
 _BLANK_RUN = re.compile(r"\n{3,}")
@@ -460,6 +468,19 @@ def unfaithful(phrased: str, computed: router.Answer) -> list[str]:
     invented = sorted(set(_AMOUNT.findall(phrased)) - known)
     if invented:
         return invented
+
+    # The same record twice. Told to write the total and every row, qwen3-4b once
+    # produced the list, then a heading, then five of the rows over again -- an answer
+    # where a reader counting overdue filings gets fourteen instead of nine. Nothing
+    # was fabricated and nothing was missing, so every check up to here passed it.
+    seen: set[str] = set()
+    for line in phrased.splitlines():
+        row = " ".join(line.split())
+        if not row or not _AMOUNT.search(row):
+            continue
+        if row in seen:
+            return [f"tekrarlanan satır: {row[:60]}"]
+        seen.add(row)
 
     facts = _rows_with_amounts(computed.text)
     if not facts:
