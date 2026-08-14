@@ -159,6 +159,22 @@ Bu veriyle soruyu tek bir doğal Türkçe cümleyle yanıtla. Soruyu tekrar etme
 "Hangisi/hangi/kim/ne zaman" sorularında verideki satıcı adını ve tarihi de yaz --
 tek başına tutar bu soruların cevabı değildir."""
 
+#: Tables. Kept shorter than the version that preceded it, because prompt length is
+#: the latency bill and several of its rules duplicated the system block.
+_GROUNDED_TABLE = """HESAPLANAN VERİ (doğrudur):
+{facts}
+
+Soru: {question}
+
+Bu veriyi Türkçe aktar. Kurallar:
+- Verideki HER satırı ve HER rakamı yaz. Hiçbirini atlama veya özetleme.
+- İLK satırdaki toplam/özet bilgisini de mutlaka yaz.
+- Rakamları AYNEN kopyala. Yeniden hesaplama, toplama, yuvarlama YAPMA. Veride
+  olmayan bir satır ya da rakam EKLEME.
+- Rakam içermeyen uyarı cümlelerini de aktar.
+- Terimin tanımını yazma; kullanıcı rakamları istiyor.
+- Kısa bir giriş cümlesi yaz, sonra her satırı ayrı satıra koy."""
+
 #: One line, several figures -- the KDV position. Keeps the completeness rule that
 #: stopped qwen3-4b dropping the devreden figure, and drops the layout rule that made
 #: it bullet a sentence apart. Copying punctuation exactly is spelled out because the
@@ -289,6 +305,10 @@ class AgentReply:
     #: model's phrasing against the real numbers.
     facts: str | None = None
     sources: list[dict] = field(default_factory=list)
+    #: Figures the model invented, when its draft was thrown away for containing them.
+    #: Empty on every normal reply. Recorded rather than merely discarded, so how often
+    #: this happens is a measurable number instead of an impression.
+    rejected: list[str] = field(default_factory=list)
 
 
 #: Questions about the assistant itself, or greetings -- not about invoice data. Cheap
@@ -386,6 +406,88 @@ def _is_tabular(computed: router.Answer) -> bool:
     changed from a list to a sentence -- nothing connected the two.
     """
     return computed.intent in TABULAR_INTENTS or "\n" in computed.text
+
+
+#: A word long enough to identify a subject. Turkish names and unvan words run well
+#: past five letters; "KDV", "TL" and "vade" do not, which is the point -- they sit on
+#: every row and identify nothing.
+_SUBJECT_WORD = re.compile(r"[^\W\d_]{5,}", re.UNICODE)
+#: A period ("2026-02") or a due date ("2026-03-28"). The field that made the invented
+#: row false: it carried a real client, a real amount and the wrong month.
+_PERIOD = re.compile(r"\d{4}-\d{2}(?:-\d{2})?")
+
+
+def _rows_with_amounts(text: str) -> list[tuple[set[str], set[str], set[str]]]:
+    """Each line carrying money, as (amounts, identifying words, periods and dates).
+
+    A word appearing on most lines cannot tell rows apart, so it is dropped: on a
+    deadline table "tahakkuk" and "gecti" are on every line and only the client's name
+    distinguishes them.
+    """
+    lines = [ln for ln in text.splitlines() if _AMOUNT.search(ln)]
+    counts: dict[str, int] = {}
+    for line in lines:
+        for word in {fold_tr(w) for w in _SUBJECT_WORD.findall(line)}:
+            counts[word] = counts.get(word, 0) + 1
+    cutoff = max(1, len(lines) // 2)
+    return [
+        (set(_AMOUNT.findall(line)),
+         {w for w in {fold_tr(x) for x in _SUBJECT_WORD.findall(line)}
+          if counts[w] <= cutoff},
+         set(_PERIOD.findall(line)))
+        for line in lines
+    ]
+
+
+def unfaithful(phrased: str, computed: router.Answer) -> list[str]:
+    """What the model wrote that the facts it was given do not support.
+
+    Asked which clients were overdue, qwen3-4b listed "Kaya Yapi  KDV 2026-02
+    6.000,00 TL" -- a filing that does not exist -- while dropping Zirve's real
+    12.450,75 MUHTASAR. It invented a tax liability and hid another in one answer.
+
+    Checking amounts alone does not catch that, and it is worth being exact about why:
+    6.000,00 is a real figure, 2026-02 a real period, Kaya Yapi a real client. Every
+    token came from the facts; only the *combination* was false -- Zeynep's period and
+    amount wearing Kaya's name. So rows are checked as rows. A line carrying money has
+    to agree with one single line of the facts on both the amount and on a word saying
+    whose row it is.
+
+    Prompting cannot prevent recombination, only ask against it, and it was measured
+    being ignored. Checking the answer against its own source can, and costs nothing.
+    """
+    known = set(_AMOUNT.findall(computed.text))
+    invented = sorted(set(_AMOUNT.findall(phrased)) - known)
+    if invented:
+        return invented
+
+    facts = _rows_with_amounts(computed.text)
+    if not facts:
+        return []
+    bad = []
+    for line in phrased.splitlines():
+        amounts = set(_AMOUNT.findall(line))
+        if not amounts:
+            continue
+        words = {fold_tr(w) for w in _SUBJECT_WORD.findall(line)}
+        named = [row for row in facts if words & row[1]]
+        # A summary line names no subject and totals the rest, so there is nothing for
+        # it to contradict; the amount check above already covers it.
+        if not named:
+            continue
+        periods = set(_PERIOD.findall(line))
+        # Several rows of the *same* subject is the normal case -- one client can have
+        # filings in several periods, and the period is what tells them apart. Several
+        # different subjects on one line means the model wrote the table as flowing
+        # prose, where no single fact row holds all those figures and demanding one
+        # would reject a faithful answer. Those lines rest on the amount check above;
+        # a wrong pairing inside flattened prose is not detectable this way, and
+        # claiming otherwise would be worse than admitting it.
+        if len({frozenset(subject) for _, subject, _ in named}) > 1:
+            continue
+        if not any(amounts <= amts and periods <= spans for amts, _, spans in named):
+            bad.append(line.strip()[:70])
+    return bad
 
 
 def _is_multi_figure(computed: router.Answer) -> bool:
@@ -502,39 +604,53 @@ def answer(
         # into "that information is not in the invoices", which is a different and
         # false claim. Returned unchanged, the same way capabilities() is.
         # A table of rows is data, not wording, and the model must not retype it.
-        # Asked to reproduce nine overdue filings, qwen3-4b returned a KDV 2026-02
-        # filing for Kaya Yapı -- a client who has 2026-01 and 2026-04 and nothing in
-        # between -- while dropping Zirve's real 12.450,75 MUHTASAR and Canan's 360,00.
-        # It invented a tax liability and hid two others in the same answer.
-        #
-        # Everything already tried to prevent that was a request the model could
-        # decline: reproduce every row, keep the total, do not summarise. Rows now
-        # bypass the model entirely, which makes the failure impossible rather than
-        # unlikely. It also makes the slowest answers instant, since these are the ones
-        # that carried a 1200-token budget.
-        #
-        # Prose answers still go through it. One figure in a sentence is checkable at a
-        # glance and is where phrasing actually helps.
-        if computed.verbatim or not use_llm or _is_tabular(computed):
+        if computed.verbatim or not use_llm:
             return AgentReply(computed.text, "router", computed.intent.value,
                               facts=computed.text)
-        template = _GROUNDED_FIGURES if _is_multi_figure(computed) else _GROUNDED
-        try:
-            phrased = foundry.chat_turns(
-                turns + [{
-                    "role": "user",
-                    "content": template.format(facts=computed.text, question=question),
-                }],
-                system=_system_prompt(),
-                max_tokens=700,
-            )
-        except foundry.FoundryError:
-            # The numbers are already correct without the model; degrade to them
-            # rather than failing the request outright.
-            return AgentReply(computed.text, "router", computed.intent.value,
-                              facts=computed.text)
-        return AgentReply(plain_text(phrased, question) or computed.text, "router+llm",
-                          computed.intent.value, facts=computed.text)
+
+        if _is_tabular(computed):
+            template, budget = _GROUNDED_TABLE, 1200
+        elif _is_multi_figure(computed):
+            template, budget = _GROUNDED_FIGURES, 700
+        else:
+            template, budget = _GROUNDED, 700
+        prompt = template.format(facts=computed.text, question=question)
+
+        # The model writes every answer, and what it writes is checked before it ships.
+        #
+        # Asked which clients were overdue, qwen3-4b once listed "Kaya Yapı KDV 2026-02
+        # 6.000,00 TL" -- a filing that does not exist -- while dropping Zirve's real
+        # 12.450,75 MUHTASAR. Every guard against that was a request it could decline,
+        # so this stopped being a prompting problem. Comparing the reply against the
+        # facts it was handed is cheap and cannot be talked out of.
+        #
+        # One retry, because the fault is sampling rather than comprehension and a
+        # second draw usually lands. If that also invents a figure, the computed answer
+        # goes out instead: a plainer reply is a bad outcome, a fabricated tax
+        # liability is not an outcome at all.
+        last = ""
+        for attempt in range(2):
+            try:
+                phrased = foundry.chat_turns(
+                    turns + [{"role": "user", "content": prompt}],
+                    system=_system_prompt(), max_tokens=budget,
+                )
+            except foundry.FoundryError:
+                # The numbers are already correct without the model; degrade to them
+                # rather than failing the request outright.
+                return AgentReply(computed.text, "router", computed.intent.value,
+                                  facts=computed.text)
+            text = plain_text(phrased, question)
+            if not text:
+                continue
+            last = text
+            if not unfaithful(text, computed):
+                return AgentReply(text, "router+llm", computed.intent.value,
+                                  facts=computed.text)
+
+        invented = unfaithful(last, computed) if last else []
+        return AgentReply(computed.text, "router", computed.intent.value,
+                          facts=computed.text, rejected=invented)
 
     # Not an aggregate. Retrieval decides which of two very different things this is:
     # a genuine invoice lookup ("vidalama seti hangi faturada"), or a question that

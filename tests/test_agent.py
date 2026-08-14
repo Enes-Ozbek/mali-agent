@@ -479,81 +479,51 @@ def test_a_prose_answer_is_never_given_the_table_layout_rule(conn, spy):
     assert "HER rakamı" in prompt
 
 
-def test_a_table_answer_never_reaches_the_model(conn, spy):
-    """Rows are data, and the model must not retype them.
-
-    Asked to reproduce nine overdue filings, qwen3-4b returned a KDV 2026-02 filing for
-    a client who has 2026-01 and 2026-04 and nothing between them, and dropped two real
-    ones in the same answer -- inventing a tax liability while hiding 12.450,75 TL that
-    someone genuinely owed. Every earlier guard was a request the model could decline.
-    """
+def test_a_table_answer_is_written_by_the_model(conn, spy):
+    """Every answer is the model's, tables included -- that was asked for explicitly."""
     reply = agent.answer(conn, "kategorilere göre dağılım nedir")
-    assert spy == [], "a table was sent to the model to retype"
-    assert reply.source == "router"
+    assert spy, "the table never reached the model"
+    assert reply.source == "router+llm"
 
 
-def test_a_table_answer_is_exactly_what_sql_computed(conn):
-    """Byte-identical, so no row can be added, lost or altered on the way out."""
+def test_a_fabricated_row_is_never_shown(conn, monkeypatch):
+    """The reply that started this listed "Kaya Yapı KDV 2026-02 6.000,00 TL" -- a
+    filing that does not exist. Every token in it was real: a real client, a real
+    amount, a real period. Only the combination was invented, Zeynep's period and
+    amount wearing Kaya's name, which is why checking amounts alone let it through."""
+    computed = router.route(conn, "kategorilere göre dağılım nedir").text
+    forged = computed.replace("telekom", "kurgusal").replace("1.770,00", "9.999,99")
+    monkeypatch.setattr(foundry, "chat_turns", lambda messages, **kw: forged)
+
+    reply = agent.answer(conn, "kategorilere göre dağılım nedir")
+    assert "9.999,99" not in reply.text, "an invented figure reached the user"
+    assert reply.text == computed
+    assert reply.rejected, "the rejection went unrecorded"
+
+
+def test_a_faithful_rewording_is_kept(conn, monkeypatch):
+    """The gate must not eat good answers: the model may say the same thing its own
+    way, as long as every figure is one it was given."""
     computed = router.route(conn, "kategorilere göre dağılım nedir")
+    faithful = "Kategoriler şöyle: " + computed.text.replace("\n", " ")
+    monkeypatch.setattr(foundry, "chat_turns", lambda messages, **kw: faithful)
+
     reply = agent.answer(conn, "kategorilere göre dağılım nedir")
-    assert reply.text == computed.text
+    assert reply.source == "router+llm"
+    assert reply.rejected == []
 
 
-def test_a_single_figure_answer_gets_the_plain_template(conn, spy):
-    """One number needs no completeness scaffolding, and adding it invites the model to
-    pad the answer out with structure that is not there."""
-    agent.answer(conn, "kaç fatura var")
-    prompt = _prompt_of(spy)
-    assert "Kurallar:" not in prompt
+def test_a_second_draft_is_requested_before_giving_up(conn, monkeypatch):
+    """Fabrication is a sampling accident, not a misunderstanding, so a fresh draw
+    usually lands. Falling back on the first bad one would throw away good phrasing."""
+    computed = router.route(conn, "kategorilere göre dağılım nedir")
+    drafts = ["Uydurma 9.999,99 TL.", computed.text]
+    monkeypatch.setattr(foundry, "chat_turns", lambda messages, **kw: drafts.pop(0))
 
-
-def test_warnings_without_figures_are_preserved(conn, spy):
-    """"İki rakam uyuşmuyor, fişleri kontrol edin" carries no number, so a rule about
-    keeping every *figure* does not protect it -- and the model dropped it. It is the
-    entire point of cross-checking the computed VAT against the tahakkuk."""
-    agent.answer(conn, "Ödenecek KDV ne kadar?")
-    prompt = _prompt_of(spy)
-    assert "uyuşmuyor" in prompt and "ASLA atlama" in prompt
-
-
-def test_the_prompt_header_aside_is_stripped_even_without_its_label():
-    """The scaffold filter matched lines containing "HESAPLANAN VERİ". The model does
-    not always keep the label: it swaps in a noun of its own and emits
-    "Aylık dağılım (veritabanından, doğrudur)):", which sailed through."""
-    out = agent.plain_text("Aylık dağılım (veritabanından, doğrudur)):\n"
-                           "- 2026-01  203.650,00 TL", "Aylık dağılım nedir?")
-    assert "veritabanından" not in out
-    assert "203.650,00" in out
-    assert "))" not in out and "dağılım):" not in out, f"stray bracket left: {out!r}"
-
-
-def test_an_invented_answer_label_is_stripped():
-    out = agent.plain_text("CEVAP:\nÖdenecek KDV yok; 60.508,00 TL devreden.",
-                           "Ödenecek KDV ne kadar?")
-    assert out.startswith("Ödenecek KDV yok")
-
-
-def test_an_inline_question_echo_is_stripped():
-    """Only echoes on their own line were removed. qwen3-4b also writes the question
-    and the answer on one line: "Toplam KDV ne kadar? Toplam KDV/vergi: 101.692,00 TL"."""
-    out = agent.plain_text("Toplam KDV ne kadar? Toplam KDV/vergi: 101.692,00 TL.",
-                           "Toplam KDV ne kadar?")
-    assert out == "Toplam KDV/vergi: 101.692,00 TL."
-
-
-def test_ordinary_brackets_and_similar_openings_survive():
-    """The strippers must not damage a legitimate answer. Brackets are ordinary Turkish
-    punctuation, and an answer may open with the same words as the question without
-    being an echo of it."""
-    kept = agent.plain_text("Fatura (KDV dahil) 1.000,00 TL (peşin).", "toplam ne kadar")
-    assert kept == "Fatura (KDV dahil) 1.000,00 TL (peşin)."
-
-    opener = agent.plain_text("Toplam KDV toplamda 101.692,00 TL tuttu.",
-                              "Toplam KDV ne kadar?")
-    assert opener == "Toplam KDV toplamda 101.692,00 TL tuttu."
-
-
-# --- the summary line a table answer must keep -----------------------------------
+    reply = agent.answer(conn, "kategorilere göre dağılım nedir")
+    assert drafts == [], "the model was not asked a second time"
+    assert reply.source == "router+llm"
+    assert "9.999,99" not in reply.text
 
 
 def test_a_prose_answer_still_goes_through_the_model(conn, monkeypatch):
