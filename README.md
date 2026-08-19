@@ -22,6 +22,10 @@ no telemetry.
 
 ---
 
+![Gündem — the landing page](docs/img/gundem.png)
+
+---
+
 ## Quick start
 
 Requires Python 3.11+ and [Foundry Local](https://learn.microsoft.com/azure/ai-foundry/foundry-local/)
@@ -137,6 +141,8 @@ total is "tahakkuk eden", and the board says so in as many words.
   full-screen PDF preview.
 - **Hesap Planı** — supplier rules and category defaults.
 - **Yevmiye indir** — the journal export, scoped to whatever the tree has selected.
+
+![A client's workspace, scoped to one month](docs/img/musteri.png)
 
 ### Search
 
