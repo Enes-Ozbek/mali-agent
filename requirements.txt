@@ -12,3 +12,7 @@ scikit-learn>=1.5
 # project has had was geometry or reachability, which no Python test could see.
 # After installing:  python -m playwright install chromium
 pytest-playwright>=0.8
+
+# Only needed by scripts/seed_mock_archive.py, which renders the demo archive as
+# real PDFs so the extractors run over the same shape of file they see in production.
+reportlab>=4.0

@@ -33,7 +33,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # and cedilla characters ("ı", "ğ", "ş" print as garbage). A real Unicode TTF is required
 # so the rendered PDF text round-trips through pdfplumber correctly.
 _FONT_NAME = "TRFont"
-pdfmetrics.registerFont(TTFont(_FONT_NAME, r"C:\Windows\Fonts\arial.ttf"))
+
+#: A Unicode TTF, wherever this machine keeps one. The path was hardcoded to Arial
+#: under C:\Windows\Fonts, so the script died on import anywhere but Windows --
+#: Colab and CI included.
+_FONT_CANDIDATES = (
+    r"C:\Windows\Fonts\arial.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+)
+
+
+def _register_font() -> None:
+    for path in _FONT_CANDIDATES:
+        if Path(path).exists():
+            pdfmetrics.registerFont(TTFont(_FONT_NAME, path))
+            return
+    raise SystemExit(
+        "Unicode bir TTF bulunamadi. Denenen yollar:\n  "
+        + "\n  ".join(_FONT_CANDIDATES)
+        + "\n\nLinux: sudo apt-get install -y fonts-dejavu-core"
+    )
+
+
+_register_font()
 
 MONTHS_TR = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
              "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
