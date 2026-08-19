@@ -207,10 +207,29 @@ The split exists because it was measured: asked to answer "en son ne zaman alı�
 yaptım" from embeddings alone, `qwen3-4b` replied with a date that appears nowhere in the
 corpus.
 
-| Mode | Behaviour | Speed |
-|---|---|---|
-| **AI** | SQL computes, model phrases, conversation carries | ~30–60s on CPU |
-| **Hızlı** | Raw computed answer, no model call | instant |
+| Mode | Behaviour | CPU | GPU |
+|---|---|---|---|
+| **AI** | SQL computes, model phrases, conversation carries | 25–35s a sentence, 150–220s a nine-row table | seconds |
+| **Hızlı** | Raw computed answer, no model call | instant | instant |
+
+Generation is the whole bill, and it is worth knowing where it goes. "Kaç belge
+kayıtlı?" spent **41 seconds producing thirteen tokens** — almost all of it prefill,
+grinding the prompt through a CPU. A nine-row deadline table makes the model emit ~557
+tokens instead, which is why it costs six times as much. Neither number is a property
+of the model: swapping qwen3-4b for the smaller qwen3-1.7b made it *slower* on median
+and worse at keeping figures.
+
+What actually fixes it is hardware. Foundry Local supports NVIDIA and recent AMD GPUs;
+where it does not — this was developed on an RX 5600 XT — the endpoint can be pointed
+at any OpenAI-compatible server instead:
+
+```bash
+export FOUNDRY_LOCAL_ENDPOINT=http://127.0.0.1:11434/v1   # e.g. Ollama
+```
+
+Run against a T4 that way, the same questions come back in seconds rather than
+minutes. `CHAT_ALIAS` and `EMBED_ALIAS` in `foundry.py` have to match whatever model
+ids that server reports.
 
 It answers from the compliance data as well as the invoice tables — "hangi müşterinin
 vadesi geçti", "hangi müşteride eksik belge var", "müşteri bazında dağılım" all read the
