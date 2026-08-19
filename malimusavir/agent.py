@@ -138,14 +138,20 @@ CLIENT_QUESTIONS: tuple[router.Intent, ...] = (
 #: model to refrain. Asking costs tokens on every request; stripping costs none.
 #: Retired with them: the instructions about reproducing rows, which no longer reach
 #: the model at all now that tables are returned verbatim.
+#:
+#: Scoped to document data rather than to all numbers, because a blanket ban on
+#: arithmetic also caught "10 kere 100" and the model answered, then argued with itself
+#: about whether it was allowed to. The permission to answer general questions lives in
+#: _OFF_TOPIC, the only prompt where it applies: softening it here instead cost 7 of 23
+#: eval cases, since it reached every grounded answer too.
 _SYSTEM_BASE = """Sen bir Türk mali müşavir bürosunun asistanısın. Belgeler kullanıcının
 MÜŞTERİLERİNE aittir, kendisine değil.
 
 Kurallar:
 - "HESAPLANAN VERİ" sayıları veritabanından gelir ve DOĞRUDUR. Aynen kullan; BU
   rakamları asla değiştirme, yuvarlama veya yeniden hesaplama.
-- Belgelere dair, sana verilmeyen bir rakam uydurma. Veri yoksa "bu bilgi faturalarda
-  yok" de. (Bu kural belge verisi içindir; genel bilgi soruları bunun dışındadır.)
+- Belgelere dair, sana verilmeyen bir rakamı ASLA uydurma. Veri yoksa "bu bilgi
+  faturalarda yok" de.
 - Kısa, düz Türkçe yaz. Para birimi "1.234,56 TL". Markdown kullanma.
 - Verideki parantez içi kapsamı koru: "tüm müşteriler" kapsamındaki bir rakamı tek bir
   müşteriye atfetme. Bir müşteri adı geçiyorsa o adı kullan, başka ad uydurma.
@@ -281,6 +287,12 @@ def plain_text(text: str, question: str | None = None) -> str:
         # KDV/vergi (...): 101.692,00 TL" repeats the question inline, and splitting on
         # newlines never saw it. Only an exact prefix is removed, so an answer that
         # merely opens with similar words is left alone.
+        # A reply that is *only* the question is not an answer. Asked "Ödenecek KDV ne
+        # kadar?" qwen3-4b once returned exactly that and nothing else; kept, it reached
+        # the user as their own question echoed back. Emptied here so the caller falls
+        # back to the computed text, which every caller now does.
+        elif _same_text(cleaned, question):
+            cleaned = ""
         elif fold_tr(cleaned).startswith(fold_tr(question.strip())):
             # Comma and semicolon too: "10 kere 100, 1.000 olur" is an echo followed by
             # the answer, and trimming only the words left a reply opening on a stray
@@ -727,7 +739,8 @@ def answer(
         }
         for h in hits
     ]
-    return AgentReply(plain_text(text, question), "rag", "semantic", sources=sources)
+    return AgentReply(plain_text(text, question) or "Şu an yanıt veremiyorum.",
+                      "rag", "semantic", sources=sources)
 
 
 def converse(

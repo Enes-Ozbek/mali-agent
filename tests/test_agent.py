@@ -90,8 +90,7 @@ def test_the_model_is_told_to_phrase_not_to_compute(conn, spy):
     # answer and then argued with itself about whether it was allowed to, three times
     # in the same reply.
     assert "yeniden hesaplama" in system
-    assert "uydurma" in system
-    assert "genel bilgi soruları bunun dışındadır" in system
+    assert "ASLA uydurma" in system
 
 
 def test_use_llm_false_skips_the_model_entirely(conn, spy):
@@ -305,10 +304,12 @@ def test_an_inline_echo_loses_the_question_but_not_the_answer():
     assert "Üç tane" in cleaned and "9.000,00" in cleaned
 
 
-def test_plain_text_keeps_a_single_line_reply_even_if_it_echoes():
-    """Dropping it would leave nothing at all."""
-    assert agent.plain_text("Kaç faturası var?", question="Kaç faturası var?") \
-        == "Kaç faturası var?"
+def test_a_reply_that_is_only_the_question_counts_as_no_reply():
+    """This used to be kept, on the reasoning that dropping it would leave nothing at
+    all. There is something now: every caller falls back to the computed answer. Asked
+    "Odenecek KDV ne kadar?" the model returned exactly that and nothing else, and the
+    user got their own question back where a KDV position should have been."""
+    assert agent.plain_text("Kac faturasi var?", question="Kac faturasi var?") == ""
 
 
 def test_the_help_text_is_written_for_an_accountant_not_a_consumer(conn):
