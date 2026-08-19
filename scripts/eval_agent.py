@@ -46,29 +46,29 @@ class Case:
 
 CASES = [
     # --- plain arithmetic, practice-wide ---------------------------------------------
-    Case("Toplam ne kadar harcandı?", ["438.892,00"], note="global total"),
-    Case("Kaç fatura var?", ["13"], note="global count"),
+    Case("Toplam ne kadar harcandı?", ["618.892,00"], note="global total"),
+    Case("Kaç fatura var?", ["16"], note="global count"),
     Case("En pahalı fatura hangisi?", ["120.000,00"], note="largest invoice"),
-    Case("Ne kadar KDV ödendi?", ["71.692,00"], note="global tax"),
+    Case("Ne kadar KDV ödendi?", ["101.692,00"], note="global tax"),
 
     # --- scoped by naming a client in the question ------------------------------------
-    Case("Canan Aydın'ın kaç faturası var?", ["3"], forbid=["13 fatura"],
+    Case("Canan Aydın'ın kaç faturası var?", ["3"], forbid=["16 fatura"],
          note="client named in an unscoped panel"),
-    Case("Kaya Yapı'nın toplamı ne kadar?", ["234.000,00"], forbid=["438.892,00"],
+    Case("Kaya Yapı'nın toplamı ne kadar?", ["414.000,00"], forbid=["618.892,00"],
          note="named-client total"),
     Case("Zeynep Çelik'in en pahalı faturası hangisi?", ["54.000,00"],
          forbid=["120.000,00"], note="largest within one client"),
 
     # --- scoped by the panel (a client's page) ----------------------------------------
-    Case("Toplam ne kadar harcadı?", ["114.000,00"], forbid=["438.892,00"],
+    Case("Toplam ne kadar harcadı?", ["114.000,00"], forbid=["618.892,00"],
          client="Zeynep", note="panel scope, no name in question"),
-    Case("Kaç faturası var?", ["3"], client="Kaya", forbid=["13 fatura"],
+    Case("Kaç faturası var?", ["6"], client="Kaya", forbid=["16 fatura"],
          note="panel scope count"),
 
     # --- conversational follow-up ------------------------------------------------------
     Case("Peki kaç fatura vardı?", ["3"],
          history=[("Canan Aydın'ın toplamı ne kadar?", "Canan Aydın'ın toplamı 9.000,00 TL.")],
-         forbid=["13 fatura"], note="follow-up inherits the client"),
+         forbid=["16 fatura"], note="follow-up inherits the client"),
     # Checks the line items, not the total: the model reliably lists all three rows but
     # often drops the summed line, which is an omission rather than an error.
     Case("Listele onları", ["3.840,00", "2.160,00", "3.000,00"],
@@ -84,16 +84,16 @@ CASES = [
     Case("Aylık harcama nedir?", ["2026-01"], note="monthly breakdown"),
 
     # --- the KDV position, which is NOT the sum of tax_amount --------------------------
-    # Kaya is in a refund position: 39.000 input VAT, nothing owed. The TAX intent used
+    # Kaya is in a refund position: 69.000 input VAT, nothing owed. The TAX intent used
     # to answer "39.000,00 TL vergi", which reads as money owed. Worst answer in the app.
-    Case("Ödenecek KDV ne kadar?", ["Ödenecek KDV yok", "39.000,00"],
+    Case("Ödenecek KDV ne kadar?", ["Ödenecek KDV yok", "69.000,00"],
          client="Kaya", note="refund position must not read as money owed"),
     Case("Ödenecek KDV ne kadar?", ["19.000,00", "15.000,00"], client="Zeynep",
          note="payable position, and the tahakkuk disagreement must survive"),
     Case("Toplam gelir ne kadar?", ["0,00"], client="Kaya",
-         forbid=["234.000,00", "195.000,00"], note="no sales: a real zero, not filler"),
-    Case("Toplam gider ne kadar?", ["195.000,00"], client="Kaya",
-         forbid=["234.000,00"], note="gider is net of VAT, purchases only"),
+         forbid=["414.000,00", "345.000,00"], note="no sales: a real zero, not filler"),
+    Case("Toplam gider ne kadar?", ["345.000,00"], client="Kaya",
+         forbid=["414.000,00"], note="gider is net of VAT, purchases only"),
     Case("Toplam gelir ne kadar?", ["95.000,00"], client="Zeynep",
          forbid=["114.000,00"], note="gelir is net of VAT, sales only"),
 

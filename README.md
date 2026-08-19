@@ -212,24 +212,22 @@ corpus.
 | **AI** | SQL computes, model phrases, conversation carries | 25–35s a sentence, 150–220s a nine-row table | seconds |
 | **Hızlı** | Raw computed answer, no model call | instant | instant |
 
-Generation is the whole bill, and it is worth knowing where it goes. "Kaç belge
-kayıtlı?" spent **41 seconds producing thirteen tokens** — almost all of it prefill,
-grinding the prompt through a CPU. A nine-row deadline table makes the model emit ~557
-tokens instead, which is why it costs six times as much. Neither number is a property
-of the model: swapping qwen3-4b for the smaller qwen3-1.7b made it *slower* on median
-and worse at keeping figures.
+The CPU figures are prompt processing, not thinking: "Kaç belge kayıtlı?" spent **41
+seconds producing thirteen tokens**. A nine-row table makes the model emit ~557 tokens
+instead, which is the whole of the difference. A smaller model does not help — measured,
+qwen3-1.7b came back *slower* on median and kept one figure in four where qwen3-4b kept
+four.
 
-What actually fixes it is hardware. Foundry Local supports NVIDIA and recent AMD GPUs;
-where it does not — this was developed on an RX 5600 XT — the endpoint can be pointed
-at any OpenAI-compatible server instead:
+A GPU does. Where Foundry Local has no driver for the card in the machine, the client
+points anywhere OpenAI-compatible instead, so a supported GPU is usable through Ollama
+or vLLM:
 
 ```bash
 export FOUNDRY_LOCAL_ENDPOINT=http://127.0.0.1:11434/v1   # e.g. Ollama
 ```
 
-Run against a T4 that way, the same questions come back in seconds rather than
-minutes. `CHAT_ALIAS` and `EMBED_ALIAS` in `foundry.py` have to match whatever model
-ids that server reports.
+`CHAT_ALIAS` and `EMBED_ALIAS` in `foundry.py` then have to match the model ids that
+server reports.
 
 It answers from the compliance data as well as the invoice tables — "hangi müşterinin
 vadesi geçti", "hangi müşteride eksik belge var", "müşteri bazında dağılım" all read the
@@ -237,36 +235,36 @@ same `compliance.py` the Gündem board does, so the two cannot disagree.
 
 Things learned by measurement and encoded here:
 
+- **Nothing the model writes is shown unchecked.** Asked which clients were overdue,
+  qwen3-4b once listed a KDV filing for a client who had none in that period, while
+  dropping a real 12.450,75 TL one — inventing a tax liability and hiding another in a
+  single answer. Checking amounts does not catch that: the client, the figure and the
+  period were all real, and only the *combination* was invented. So rows are checked as
+  rows — a line carrying money has to agree with one line of the computed facts on the
+  amount, on a word saying whose row it is, and on the period. A reply that fails is
+  redrawn once, then dropped in favour of the computed answer.
 - **Scope travels with every figure.** Asked "Canan Aydın'ın kaç faturası var" on the
-  practice-wide page, an earlier version computed the *global* count and the model presented
-  it as Canan's — a real number under the wrong name. Computed answers now carry their
-  subject, including "tüm müşteriler" when unscoped.
-- **Asking about another client from a client's page is refused**, not answered with the
-  page's client under the name you typed.
+  practice-wide page, an earlier version computed the *global* count and the model
+  presented it as Canan's — a real number under the wrong name. Computed answers now carry
+  their subject, and asking about another client from a client's page is refused rather
+  than answered with the wrong books.
 - **Refusals are never reworded by the model.** Handed "this panel covers Zeynep, ask on
   Canan's page", qwen3-4b returned "bu bilgi faturalarda yok" — a different and false claim.
-- **Tables get a completeness instruction and a larger token budget.** Given the full
-  monthly breakdown, the model once replied with a *definition* of the term and no data.
+- **Anything the model reliably drops is restored in code, not asked for again.** Four
+  prompt instructions were measured as ignored, the clearest being the table's header
+  total: missing in four runs out of five, leaving a vendor list the reader has to add up
+  by hand. It is put back from the computed answer, so its digits still come from SQL.
 - **It is written for the müşavir, not the taxpayer.** The suggestion list used to offer
   "En son ne zaman alışveriş yaptım?" and the greeting said "N faturanız yüklü" — wording
   inherited from when this tracked one person's own spending. An accountant does not go
-  shopping in a client's ledger. A test now fails on first-person phrasing.
-- **Which template an answer gets is decided by its shape, not by a list of intents.**
-  The KDV position was listed as tabular while its wording was a single sentence, so it
-  received a rule ending "put each row on its own line" and had no rows: qwen3-4b
-  bulleted the sentence apart, wrote "5 müşteri))", shouted the closing caveat, and
-  pasted the prompt scaffold into the reply. The figures were right throughout, which is
-  why no numeric check saw it.
-- **Anything the model reliably drops is restored in code, not asked for again.** Three
-  prompt instructions were measured as ignored: keep every row's layout, keep warning
-  sentences that carry no figure, and keep the table's header total — that last one
-  missing in four runs out of five, leaving a vendor list the reader has to add up by
-  hand. The total is put back from the computed answer, so its digits still come from
-  SQL.
+  shopping in a client's ledger. A test now fails on first-person phrasing, and the
+  suggestions differ by scope, because "dönem hasılatı" means nothing summed across
+  unrelated businesses.
 
 `scripts/eval_agent.py` asks 23 questions whose answers SQL already knows, checking route,
 facts and answer separately — so a routing bug is distinguishable from the model mangling a
-correct number. It currently passes 23/23 in both modes.
+correct number. `--fast` checks the computed layer and passes 23/23; without it the same
+questions go through the model as well, which takes far longer to run.
 
 ---
 
@@ -307,9 +305,9 @@ Measured alternatives it replaced, on 6 held-out vendors: `qwen3-4b` generative 
 .\.venv\Scripts\python.exe scripts\eval_agent.py        # assistant, needs Foundry
 ```
 
-**600 tests, 90% line coverage** over `malimusavir/`.
+**604 tests, 90% line coverage** over `malimusavir/`.
 
-29 of them drive the dashboard in a real browser (Playwright — after installing, run
+30 of them drive the dashboard in a real browser (Playwright — after installing, run
 `python -m playwright install chromium`). Those exist because every UI regression this
 project has had was invisible to the Python suite: a preview pane that rendered at
 208×157px inside the tree rail, a tab panel nested where its condition could never be true,
