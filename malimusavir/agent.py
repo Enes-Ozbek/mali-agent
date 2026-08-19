@@ -142,9 +142,10 @@ _SYSTEM_BASE = """Sen bir Türk mali müşavir bürosunun asistanısın. Belgele
 MÜŞTERİLERİNE aittir, kendisine değil.
 
 Kurallar:
-- "HESAPLANAN VERİ" sayıları veritabanından gelir ve DOĞRUDUR. Aynen kullan; asla
-  değiştirme, yuvarlama veya kendi hesabını yapma.
-- Verilmeyen bir sayıyı asla uydurma. Veri yoksa "bu bilgi faturalarda yok" de.
+- "HESAPLANAN VERİ" sayıları veritabanından gelir ve DOĞRUDUR. Aynen kullan; BU
+  rakamları asla değiştirme, yuvarlama veya yeniden hesaplama.
+- Belgelere dair, sana verilmeyen bir rakam uydurma. Veri yoksa "bu bilgi faturalarda
+  yok" de. (Bu kural belge verisi içindir; genel bilgi soruları bunun dışındadır.)
 - Kısa, düz Türkçe yaz. Para birimi "1.234,56 TL". Markdown kullanma.
 - Verideki parantez içi kapsamı koru: "tüm müşteriler" kapsamındaki bir rakamı tek bir
   müşteriye atfetme. Bir müşteri adı geçiyorsa o adı kullan, başka ad uydurma.
@@ -197,11 +198,17 @@ Bu veriyi tek bir kısa paragraf olarak, akıcı Türkçe cümlelerle aktar. Kur
 
 _OFF_TOPIC = """Kullanıcının sorusu faturalarıyla ilgili değil: "{question}"
 
-Bunu sıradan bir sohbet gibi, kendi genel bilgine dayanarak kısa ve samimi şekilde
-yanıtla. BUGÜNÜN TARİHİ satırındaki bilgiyi tarih/gün sorularında kullanabilirsin.
-Ama: gerçek zamanlı bilgin yok (hava durumu, güncel haberler, canlı veriler) —
-böyle bir şey sorulursa bunu dürüstçe söyle, uydurma. Kullanıcının faturaları
-hakkında hiçbir rakam veya bilgi verme; bu soru onlarla ilgili değil."""
+Bunu sıradan bir sohbet gibi, kendi genel bilgine dayanarak yanıtla.
+- EN FAZLA iki cümle. Aynı cümleyi asla tekrarlama.
+- Doğrudan cevabı ver. Kullanıcıya nasıl cevap vereceğini anlatma, alternatif
+  cevaplar önerme, "istersen şöyle diyebilirsin" deme.
+- Cevabı verdikten sonra sorunun faturalarla ilgili olmadığını tekrar tekrar
+  açıklama; bir kez yeter, hiç gerekmiyorsa hiç deme.
+- Tarihi yalnızca tarih/gün sorulduğunda yaz; sorulmadıkça ekleme.
+- Gerçek zamanlı bilgin yok (hava durumu, haberler, canlı veriler) — sorulursa
+  dürüstçe söyle, uydurma.
+- Müşterilerin belgelerinden rakam ya da bilgi aktarma; bu soru onlarla ilgili
+  değil. (Genel bilgi sorularını yanıtlaman serbesttir.)"""
 
 
 #: Markdown the model emits despite being told not to, and the prompt scaffolding it
@@ -275,7 +282,10 @@ def plain_text(text: str, question: str | None = None) -> str:
         # newlines never saw it. Only an exact prefix is removed, so an answer that
         # merely opens with similar words is left alone.
         elif fold_tr(cleaned).startswith(fold_tr(question.strip())):
-            trimmed = cleaned[len(question.strip()):].lstrip(" \t?!.:-—")
+            # Comma and semicolon too: "10 kere 100, 1.000 olur" is an echo followed by
+            # the answer, and trimming only the words left a reply opening on a stray
+            # comma.
+            trimmed = cleaned[len(question.strip()):].lstrip(" \t?!.,;:-—")
             if trimmed:
                 cleaned = trimmed
     return cleaned

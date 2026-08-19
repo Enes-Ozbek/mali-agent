@@ -84,9 +84,14 @@ def test_the_model_is_told_to_phrase_not_to_compute(conn, spy):
     # The answer is handed over as fact, and the ask is to word it.
     assert "652,82" in prompt
     assert "yanıtla" in prompt
-    # And the standing instruction forbids inventing or recomputing figures.
-    assert "kendi hesabını yapma" in system
-    assert "asla uydurma" in system
+    # And the standing instruction forbids inventing or recomputing figures. The
+    # wording is scoped to document data on purpose: a blanket "never do arithmetic"
+    # also caught general questions, and asked "10 kere 100" the model produced the
+    # answer and then argued with itself about whether it was allowed to, three times
+    # in the same reply.
+    assert "yeniden hesaplama" in system
+    assert "uydurma" in system
+    assert "genel bilgi soruları bunun dışındadır" in system
 
 
 def test_use_llm_false_skips_the_model_entirely(conn, spy):
