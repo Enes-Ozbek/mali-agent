@@ -180,6 +180,42 @@ MOCK_DATA = {
                             }
                         ],
                     },
+                    "Mayıs": {
+                        "invoices": [
+                            {
+                                "invoice_number": "GIB20260000031200",
+                                "issue_date": "2026-05-12T10:00:00Z",
+                                "direction": "ALIŞ",
+                                "counterparty": {"title": "Çelik Hazır Beton A.Ş.", "vkn_tckn": "3332221110"},
+                                "subtotal": 50000.00, "kdv_total": 10000.00, "grand_total": 60000.00,
+                                "kdv_rate": 20,
+                            }
+                        ],
+                    },
+                    "Haziran": {
+                        "invoices": [
+                            {
+                                "invoice_number": "GIB20260000031210",
+                                "issue_date": "2026-06-12T10:00:00Z",
+                                "direction": "ALIŞ",
+                                "counterparty": {"title": "Çelik Hazır Beton A.Ş.", "vkn_tckn": "3332221110"},
+                                "subtotal": 50000.00, "kdv_total": 10000.00, "grand_total": 60000.00,
+                                "kdv_rate": 20,
+                            }
+                        ],
+                    },
+                    "Temmuz": {
+                        "invoices": [
+                            {
+                                "invoice_number": "GIB20260000031220",
+                                "issue_date": "2026-07-12T10:00:00Z",
+                                "direction": "ALIŞ",
+                                "counterparty": {"title": "Çelik Hazır Beton A.Ş.", "vkn_tckn": "3332221110"},
+                                "subtotal": 50000.00, "kdv_total": 10000.00, "grand_total": 60000.00,
+                                "kdv_rate": 20,
+                            }
+                        ],
+                    },
                     "Nisan": {
                         "invoices": [
                             {
